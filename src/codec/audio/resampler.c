@@ -13,8 +13,6 @@ typedef struct AudioResampler {
     int source_sample_rate;
     int tmp_frame_capacity;
 
-    int64_t output_samples;
-
     int offset;
     int flush;
 } AudioResampler;
@@ -83,8 +81,6 @@ AudioResampler* ffw_audio_resampler_new(
     res->target_frame_samples = target_frame_samples;
     res->source_sample_rate = source_sample_rate;
     res->tmp_frame_capacity = 0;
-
-    res->output_samples = 0;
 
     res->offset = 0;
     res->flush = 0;
@@ -170,8 +166,20 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
         return ret;
     }
 
-    resampler->tmp_frame->pts = resampler->output_samples + resampler->output_pts_offset;
-    resampler->output_samples += resampler->tmp_frame->nb_samples;
+    // Compute the resampled PTS
+    AVRational from_timebase;
+    from_timebase.num = 1;
+    from_timebase.den = resampler->source_sample_rate;
+    AVRational to_timebase;
+    to_timebase.num = 1;
+    to_timebase.den = resampler->target_sample_rate;
+    int next_pts = av_rescale_q(
+        frame->pts,
+        from_timebase,
+        to_timebase
+    );
+        
+    resampler->tmp_frame->pts = next_pts;
 
     return 1;
 }
