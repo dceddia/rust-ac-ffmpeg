@@ -235,6 +235,10 @@ impl Decoder for AudioDecoder {
         }
     }
 
+    fn flush_buffers(&mut self) {
+        unsafe { super::ffw_decoder_flush_buffers(self.ptr) }
+    }
+
     fn take(&mut self) -> Result<Option<AudioFrame>, Error> {
         let mut fptr = ptr::null_mut();
 

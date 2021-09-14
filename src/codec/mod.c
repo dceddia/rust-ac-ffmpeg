@@ -196,6 +196,7 @@ int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int si
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value);
 int ffw_decoder_open(Decoder* decoder);
 int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet);
+void ffw_decoder_flush_buffers(Decoder* decoder);
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame);
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder);
 void ffw_decoder_free(Decoder* decoder);
@@ -322,6 +323,10 @@ int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet) {
     } else {
         return ret;
     }
+}
+
+void ffw_decoder_flush_buffers(Decoder* decoder) {
+    avcodec_flush_buffers(decoder->cc);
 }
 
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
