@@ -13,11 +13,7 @@ typedef struct AudioResampler {
     int source_sample_rate;
     int tmp_frame_capacity;
 
-    int64_t source_samples;
-    int64_t expected_source_pts;
     int64_t output_samples;
-    int64_t input_pts_offset;
-    int64_t output_pts_offset;
 
     int offset;
     int flush;
@@ -88,11 +84,7 @@ AudioResampler* ffw_audio_resampler_new(
     res->source_sample_rate = source_sample_rate;
     res->tmp_frame_capacity = 0;
 
-    res->source_samples = 0;
-    res->expected_source_pts = 0;
     res->output_samples = 0;
-    res->input_pts_offset = 0;
-    res->output_pts_offset = 0;
 
     res->offset = 0;
     res->flush = 0;
@@ -136,38 +128,6 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
     }
 
     if (frame) {
-        // set the initial pts expectation
-        if (resampler->source_samples == 0) {
-            resampler->expected_source_pts = frame->pts;
-            resampler->input_pts_offset = frame->pts;
-            resampler->output_pts_offset = frame->pts
-                * resampler->target_sample_rate
-                / resampler->source_sample_rate;
-        }
-
-        pts_delta = frame->pts - resampler->expected_source_pts;
-
-        if (pts_delta > 0) {
-            // insert a given number of silence samples if there is a gap
-            ret = swr_inject_silence(resampler->resample_context, pts_delta);
-
-            if (ret < 0) {
-                return ret;
-            }
-        } else if (pts_delta < 0) {
-            // drop a given number of samples
-            ret = swr_drop_output(
-                resampler->resample_context,
-                -pts_delta * resampler->target_sample_rate / resampler->source_sample_rate);
-
-            if (ret < 0) {
-                return ret;
-            }
-        }
-
-        resampler->source_samples += frame->nb_samples + pts_delta;
-        resampler->expected_source_pts = resampler->input_pts_offset + resampler->source_samples;
-
         required_capacity = swr_get_out_samples(
             resampler->resample_context,
             frame->nb_samples);
