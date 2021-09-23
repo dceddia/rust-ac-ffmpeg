@@ -116,8 +116,6 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
     int required_capacity;
     int ret;
 
-    int64_t pts_delta;
-
     // check if the internal frame has been consumed
     if (resampler->tmp_frame && (resampler->offset < resampler->tmp_frame->nb_samples)) {
         return 0;
