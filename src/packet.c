@@ -66,6 +66,18 @@ void ffw_packet_set_key(AVPacket* packet, int key) {
     }
 }
 
+int ffw_packet_is_discard(const AVPacket* packet) {
+    return packet->flags & AV_PKT_FLAG_DISCARD;
+}
+
+void ffw_packet_set_discard(AVPacket* packet, int discard) {
+    if (discard) {
+        packet->flags |= AV_PKT_FLAG_DISCARD;
+    } else {
+        packet->flags &= ~AV_PKT_FLAG_DISCARD;
+    }
+}
+
 int ffw_packet_get_size(const AVPacket* packet) {
     return packet->size;
 }

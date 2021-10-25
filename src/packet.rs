@@ -23,6 +23,8 @@ extern "C" {
     fn ffw_packet_set_dts(packet: *mut c_void, pts: i64);
     fn ffw_packet_is_key(packet: *const c_void) -> c_int;
     fn ffw_packet_set_key(packet: *mut c_void, key: c_int);
+    fn ffw_packet_is_discard(packet: *const c_void) -> c_int;
+    fn ffw_packet_set_discard(packet: *mut c_void, discard: c_int);
     fn ffw_packet_get_stream_index(packet: *const c_void) -> c_int;
     fn ffw_packet_set_stream_index(packet: *mut c_void, index: c_int);
     fn ffw_packet_make_writable(packet: *mut c_void) -> c_int;
@@ -273,6 +275,20 @@ impl Packet {
         unsafe { ffw_packet_set_dts(self.ptr, dts.timestamp()) }
 
         self
+    }
+
+    /// Set or clear the discard flag. If true, the this packet can be passed
+    /// to the decoder and the decoder will not produce a frame. Useful as an
+    /// optimization when packets should be discarded (e.g. during seeking).
+    pub fn with_discard_flag(self, discard: bool) -> Self {
+        unsafe { ffw_packet_set_discard(self.ptr, discard as _) }
+
+        self
+    }
+
+    /// Check if the discard flag is set.
+    pub fn is_discard(&self) -> bool {
+        unsafe { ffw_packet_is_discard(self.ptr) != 0 }
     }
 
     /// Check if the key flag is set.
