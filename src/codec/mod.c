@@ -183,11 +183,23 @@ void ffw_codec_parameters_free(AVCodecParameters* params) {
     avcodec_parameters_free(&params);
 }
 
+typedef struct HWDevice {
+    const char *name;
+    enum AVHWDeviceType type;
+    AVBufferRef *device_ref;
+} HWDevice;
+
 typedef struct Decoder {
     struct AVCodec* decoder;
     struct AVDictionary* options;
     struct AVCodecContext* cc;
     struct AVFrame* frame;
+    struct AVFrame* sw_frame;
+    
+    int use_hwaccel;
+    enum AVHWDeviceType hwaccel_device_type;
+    HWDevice *hwdevice;
+    enum AVPixelFormat hw_pix_fmt;
 } Decoder;
 
 Decoder* ffw_decoder_new(const char* codec);
@@ -195,11 +207,97 @@ Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int size);
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value);
 int ffw_decoder_open(Decoder* decoder);
+int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder);
 int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet);
 void ffw_decoder_flush_buffers(Decoder* decoder);
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame);
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder);
 void ffw_decoder_free(Decoder* decoder);
+
+int ffw_decoder_hwaccel_open_device(enum AVHWDeviceType type,
+                                    const char *device,
+                                    HWDevice **dev_out)
+{
+    AVBufferRef *device_ref = NULL;
+    HWDevice *dev;
+    int err;
+
+    const char *name = av_hwdevice_get_type_name(type);
+    if (!name) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    err = av_hwdevice_ctx_create(&device_ref, type, device, NULL, 0);
+    if (err < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Device creation failed: %d.\n", err);
+        goto fail;
+    }
+
+    dev = av_mallocz(sizeof(HWDevice));
+    if (!dev) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    dev->name = name;
+    dev->type = type;
+    dev->device_ref = device_ref;
+
+    if (dev_out)
+        *dev_out = dev;
+
+    return 0;
+
+fail:
+    av_buffer_unref(&device_ref);
+    return err;
+}
+
+int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
+    fprintf(stderr, "[ffw decoder] ffw_decoder_hwaccel_autoselect_device\n");
+    const AVCodecHWConfig *config;
+    enum AVHWDeviceType type;
+    enum AVPixelFormat pix_fmt;
+    HWDevice *dev = NULL;
+    int i;
+
+    fprintf(stderr, "[ffw decoder] trying to enable hardware accel\n");
+    fprintf(stderr, "  supported devices: (will use the first one)\n");
+    for (i = 0; !dev; i++) {
+        config = avcodec_get_hw_config(decoder->decoder, i);
+        if (!config)
+            break;
+        fprintf(stderr, "    %s\n", av_hwdevice_get_type_name(config->device_type));
+    }
+
+    for (i = 0; !dev; i++) {
+        config = avcodec_get_hw_config(decoder->decoder, i);
+        if (!config)
+            break;
+        type = config->device_type;
+        pix_fmt = config->pix_fmt;
+        // Try to open the device
+        if(ffw_decoder_hwaccel_open_device(type, NULL, &dev) < 0) {
+            continue;
+        }
+    }
+
+    if (dev) {
+        fprintf(stderr, "[ffw decoder] enabled hardware acceleration\n");
+        decoder->hwdevice = dev;
+        decoder->use_hwaccel = 1;
+        decoder->hwaccel_device_type = type;
+        decoder->hw_pix_fmt = pix_fmt;
+    } else {
+        fprintf(stderr, "[ffw decoder] not using hardware acceleration\n");
+        decoder->hwdevice = NULL;
+        decoder->use_hwaccel = 0;
+        decoder->hwaccel_device_type = AV_HWDEVICE_TYPE_NONE;
+    }
+
+    return 0;
+}
 
 Decoder* ffw_decoder_new(const char* codec) {
     AVCodec* decoder = avcodec_find_decoder_by_name(codec);
@@ -216,6 +314,11 @@ Decoder* ffw_decoder_new(const char* codec) {
     res->options = NULL;
     res->cc = NULL;
     res->frame = NULL;
+    res->sw_frame = NULL;
+    res->hwdevice = NULL;
+    res->hwaccel_device_type = AV_HWDEVICE_TYPE_NONE;
+    res->use_hwaccel = 0;
+    res->hw_pix_fmt = AV_PIX_FMT_NONE;
 
     res->cc = avcodec_alloc_context3(decoder);
     if (res->cc == NULL) {
@@ -224,6 +327,11 @@ Decoder* ffw_decoder_new(const char* codec) {
 
     res->frame = av_frame_alloc();
     if (res->frame == NULL) {
+        goto err;
+    }
+
+    res->sw_frame = av_frame_alloc();
+    if (res->sw_frame == NULL) {
         goto err;
     }
 
@@ -250,6 +358,7 @@ Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
     res->options = NULL;
     res->cc = NULL;
     res->frame = NULL;
+    res->sw_frame = NULL;
 
     res->cc = avcodec_alloc_context3(decoder);
     if (res->cc == NULL) {
@@ -258,6 +367,11 @@ Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
 
     res->frame = av_frame_alloc();
     if (res->frame == NULL) {
+        goto err;
+    }
+
+    res->sw_frame = av_frame_alloc();
+    if (res->sw_frame == NULL) {
         goto err;
     }
 
@@ -331,14 +445,24 @@ void ffw_decoder_flush_buffers(Decoder* decoder) {
 
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
     int ret = avcodec_receive_frame(decoder->cc, decoder->frame);
-
+    
     if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
         return 0;
     } else if (ret < 0) {
         return ret;
     }
 
-    *frame = av_frame_clone(decoder->frame);
+    // Use hardware decoding if enabled
+    if (decoder->use_hwaccel && decoder->frame->format == decoder->hw_pix_fmt) {
+        /* retrieve data from GPU to CPU */
+        if ((ret = av_hwframe_transfer_data(decoder->sw_frame, decoder->frame, 0)) < 0) {
+            fprintf(stderr, "Error transferring the data to system memory\n");
+            return -1;
+        }
+        *frame = av_frame_clone(decoder->sw_frame);
+    } else {
+        *frame = av_frame_clone(decoder->frame);
+    }
 
     return 1;
 }
@@ -371,6 +495,7 @@ void ffw_decoder_free(Decoder* decoder) {
     }
 
     av_frame_free(&decoder->frame);
+    av_frame_free(&decoder->sw_frame);
 
     if (decoder->cc->extradata != NULL) {
         av_free(decoder->cc->extradata);

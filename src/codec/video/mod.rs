@@ -120,6 +120,13 @@ impl VideoDecoderBuilder {
         self
     }
 
+    /// Try to enable hardware acceleration
+    pub fn enable_hardware_accel(self) -> Self {
+        let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
+
+        self
+    }
+
     /// Build the decoder.
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
         unsafe {
