@@ -179,7 +179,12 @@ impl AudioDecoder {
         let codec_parameters = stream
             .codec_parameters()
             .into_audio_codec_parameters()
-            .unwrap();
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "failed to create AudioDecoder from stream {} - not an audio stream",
+                    stream.index()
+                ))
+            })?;
 
         let builder = AudioDecoderBuilder::from_codec_parameters(&codec_parameters)?
             .time_base(stream.time_base());

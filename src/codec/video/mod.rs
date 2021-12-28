@@ -178,13 +178,17 @@ impl VideoDecoder {
 
     /// Create a new decoder for a given stream.
     ///
-    /// # Panics
-    /// The method panics if the stream is not a video stream.
+    /// Returns an error if this is not a video stream.
     pub fn from_stream(stream: &Stream) -> Result<VideoDecoderBuilder, Error> {
         let codec_parameters = stream
             .codec_parameters()
             .into_video_codec_parameters()
-            .unwrap();
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "failed to create VideoDecoder from stream {} - not a video stream",
+                    stream.index()
+                ))
+            })?;
 
         let builder = VideoDecoderBuilder::from_codec_parameters(&codec_parameters)?
             .time_base(stream.time_base());
