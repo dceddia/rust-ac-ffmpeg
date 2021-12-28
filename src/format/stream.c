@@ -1,6 +1,7 @@
 #include <libavformat/avformat.h>
 
 void ffw_stream_get_time_base(const AVStream* stream, uint32_t* num, uint32_t* den);
+int ffw_stream_get_index(const AVStream* stream);
 int64_t ffw_stream_get_start_time(const AVStream* stream);
 int64_t ffw_stream_get_duration(const AVStream* stream);
 int64_t ffw_stream_get_nb_frames(const AVStream* stream);
@@ -10,6 +11,10 @@ int ffw_stream_set_metadata(AVStream* stream, const char* key, const char* value
 void ffw_stream_get_time_base(const AVStream* stream, uint32_t* num, uint32_t* den) {
     *num = stream->time_base.num;
     *den = stream->time_base.den;
+}
+
+int ffw_stream_get_index(const AVStream* stream) {
+    return stream->index;
 }
 
 int64_t ffw_stream_get_start_time(const AVStream* stream) {
