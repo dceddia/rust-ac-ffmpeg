@@ -57,6 +57,7 @@ int ffw_demuxer_set_option(Demuxer* demuxer, const char* key, const char* value)
 int ffw_demuxer_find_stream_info(Demuxer* demuxer, int64_t max_analyze_duration);
 unsigned ffw_demuxer_get_nb_streams(const Demuxer* demuxer);
 AVStream* ffw_demuxer_get_stream(Demuxer* demuxer, unsigned stream_index);
+int ffw_demuxer_guess_frame_rate(Demuxer* demuxer, unsigned stream_index, uint32_t* tb_num, uint32_t* tb_den);
 int ffw_demuxer_read_frame(Demuxer* demuxer, AVPacket** packet, uint32_t* tb_num, uint32_t* tb_den);
 int ffw_demuxer_seek(Demuxer* demuxer, int64_t timestamp, int seek_by, int seek_target);
 void ffw_demuxer_free(Demuxer* demuxer);
@@ -131,6 +132,21 @@ unsigned ffw_demuxer_get_nb_streams(const Demuxer* demuxer) {
 
 AVStream* ffw_demuxer_get_stream(Demuxer* demuxer, unsigned stream_index) {
     return demuxer->fc->streams[stream_index];
+}
+
+int ffw_demuxer_guess_frame_rate(Demuxer* demuxer, unsigned stream_index, uint32_t* num, uint32_t* den) {
+    AVRational dst;
+    AVStream *stream = ffw_demuxer_get_stream(demuxer, stream_index);
+
+    if (stream == NULL) {
+        return 1;
+    }
+
+    dst = av_guess_frame_rate(demuxer->fc, stream, NULL);
+    *num = dst.num;
+    *den = dst.den;
+
+    return 0;
 }
 
 int ffw_demuxer_read_frame(Demuxer* demuxer, AVPacket** packet, uint32_t* tb_num, uint32_t* tb_den) {

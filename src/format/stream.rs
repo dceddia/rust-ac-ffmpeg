@@ -28,6 +28,7 @@ extern "C" {
 pub struct Stream {
     ptr: *mut c_void,
     time_base: TimeBase,
+    frame_rate_guess: Option<TimeBase>,
 }
 
 impl Stream {
@@ -41,12 +42,22 @@ impl Stream {
         Stream {
             ptr,
             time_base: TimeBase::new(num, den),
+            frame_rate_guess: None,
         }
     }
 
     /// Get stream time base.
     pub fn time_base(&self) -> TimeBase {
         self.time_base
+    }
+
+    /// Get the best-guess frame rate
+    pub fn frame_rate_guess(&self) -> Option<TimeBase> {
+        self.frame_rate_guess
+    }
+
+    pub fn set_frame_rate_guess(&mut self, guess: Option<TimeBase>) {
+        self.frame_rate_guess = guess;
     }
 
     /// Get the stream's index.

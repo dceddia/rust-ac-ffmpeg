@@ -42,6 +42,12 @@ extern "C" {
         value: *const c_char,
     ) -> c_int;
     fn ffw_demuxer_find_stream_info(demuxer: *mut c_void, max_analyze_duration: i64) -> c_int;
+    fn ffw_demuxer_guess_frame_rate(
+        demuxer: *mut c_void,
+        stream_index: c_uint,
+        num_out: *mut u32,
+        den_out: *mut u32,
+    ) -> c_int;
     fn ffw_demuxer_get_nb_streams(demuxer: *const c_void) -> c_uint;
     fn ffw_demuxer_get_stream(demuxer: *mut c_void, index: c_uint) -> *mut c_void;
     fn ffw_demuxer_read_frame(
@@ -244,7 +250,7 @@ impl<T> Demuxer<T> {
     /// Seek to a specific timestamp in the stream.
     pub fn seek_to_timestamp(
         &self,
-        timestamp: Timestamp,
+        timestamp: &Timestamp,
         seek_target: SeekTarget,
     ) -> Result<(), Error> {
         let micros = timestamp
@@ -311,7 +317,7 @@ impl<T> Demuxer<T> {
         let mut streams = Vec::with_capacity(stream_count as usize);
 
         for i in 0..stream_count {
-            let stream = unsafe {
+            let mut stream = unsafe {
                 let ptr = ffw_demuxer_get_stream(self.ptr, i as _);
 
                 if ptr.is_null() {
@@ -321,6 +327,7 @@ impl<T> Demuxer<T> {
                 Stream::from_raw_ptr(ptr)
             };
 
+            stream.set_frame_rate_guess(self.guess_frame_rate(i as usize).ok());
             streams.push(stream);
         }
 
@@ -330,6 +337,26 @@ impl<T> Demuxer<T> {
         };
 
         Ok(res)
+    }
+
+    pub fn guess_frame_rate(&self, stream_index: usize) -> Result<TimeBase, Error> {
+        let mut num: u32 = 0;
+        let mut den: u32 = 0;
+
+        let res = unsafe {
+            ffw_demuxer_guess_frame_rate(
+                self.ptr,
+                stream_index as u32,
+                &mut num as *mut u32,
+                &mut den as *mut u32,
+            )
+        };
+
+        if res != 0 {
+            Err(Error::new("could not get frame rate, invalid stream index"))
+        } else {
+            Ok(TimeBase::new(num, den))
+        }
     }
 
     /// Get reference to the underlying IO.
