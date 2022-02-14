@@ -5,7 +5,7 @@
 
 #include <stdlib.h>
 
-AVOutputFormat* ffw_guess_output_format(
+const AVOutputFormat* ffw_guess_output_format(
     const char* short_name,
     const char* file_name,
     const char* mime_type) {

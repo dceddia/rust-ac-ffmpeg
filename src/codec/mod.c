@@ -83,7 +83,7 @@ int ffw_codec_parameters_is_subtitle_codec(const AVCodecParameters* params) {
 }
 
 const char* ffw_codec_parameters_get_decoder_name(const AVCodecParameters* params) {
-    AVCodec* codec = avcodec_find_decoder(params->codec_id);
+    const AVCodec* codec = avcodec_find_decoder(params->codec_id);
     if (!codec) {
         return NULL;
     }
@@ -92,7 +92,7 @@ const char* ffw_codec_parameters_get_decoder_name(const AVCodecParameters* param
 }
 
 const char* ffw_codec_parameters_get_encoder_name(const AVCodecParameters* params) {
-    AVCodec* codec = avcodec_find_encoder(params->codec_id);
+    const AVCodec* codec = avcodec_find_encoder(params->codec_id);
     if (!codec) {
         return NULL;
     }
@@ -191,12 +191,12 @@ typedef struct HWDevice {
 } HWDevice;
 
 typedef struct Decoder {
-    struct AVCodec* decoder;
+    const struct AVCodec* decoder;
     struct AVDictionary* options;
     struct AVCodecContext* cc;
     struct AVFrame* frame;
     struct AVFrame* sw_frame;
-    
+
     int use_hwaccel;
     enum AVHWDeviceType hwaccel_device_type;
     HWDevice *hwdevice;
@@ -301,7 +301,7 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
 }
 
 Decoder* ffw_decoder_new(const char* codec) {
-    AVCodec* decoder = avcodec_find_decoder_by_name(codec);
+    const AVCodec* decoder = avcodec_find_decoder_by_name(codec);
     if (decoder == NULL) {
         return NULL;
     }
@@ -345,7 +345,7 @@ err:
 }
 
 Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
-    AVCodec* decoder = avcodec_find_decoder(params->codec_id);
+    const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
     if (decoder == NULL) {
         return NULL;
     }
@@ -513,7 +513,7 @@ void ffw_decoder_free(Decoder* decoder) {
 typedef struct Encoder {
     struct AVDictionary* options;
     struct AVCodecContext* cc;
-    struct AVCodec* codec;
+    const struct AVCodec* codec;
     struct AVPacket* packet;
 } Encoder;
 
@@ -540,7 +540,7 @@ int ffw_encoder_take_packet(Encoder* encoder, AVPacket** packet);
 void ffw_encoder_free(Encoder* encoder);
 
 Encoder* ffw_encoder_new(const char* codec) {
-    AVCodec* encoder = avcodec_find_encoder_by_name(codec);
+    const AVCodec* encoder = avcodec_find_encoder_by_name(codec);
     if (encoder == NULL) {
         return NULL;
     }
@@ -574,7 +574,7 @@ err:
 }
 
 Encoder* ffw_encoder_from_codec_parameters(const AVCodecParameters* params) {
-    AVCodec* encoder = avcodec_find_encoder(params->codec_id);
+    const AVCodec* encoder = avcodec_find_encoder(params->codec_id);
     if (encoder == NULL) {
         return NULL;
     }
