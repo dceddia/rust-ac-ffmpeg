@@ -16,6 +16,8 @@ extern "C" {
     fn ffw_packet_clone(src: *const c_void) -> *mut c_void;
     fn ffw_packet_free(packet: *mut c_void);
     fn ffw_packet_get_size(packet: *const c_void) -> c_int;
+    fn ffw_packet_get_duration(packet: *const c_void) -> i64;
+    fn ffw_packet_set_duration(packet: *mut c_void, time: i64);
     fn ffw_packet_get_data(packet: *mut c_void) -> *mut c_void;
     fn ffw_packet_get_pts(packet: *const c_void) -> i64;
     fn ffw_packet_set_pts(packet: *mut c_void, pts: i64);
@@ -119,6 +121,22 @@ impl PacketMut {
         let dts = dts.with_time_base(self.time_base);
 
         unsafe { ffw_packet_set_dts(self.ptr, dts.timestamp()) }
+
+        self
+    }
+
+    /// Get the packet duration.
+    pub fn duration(&self) -> Timestamp {
+        let time = unsafe { ffw_packet_get_duration(self.ptr) };
+
+        Timestamp::new(time, self.time_base)
+    }
+
+    /// Set the packet duration.
+    pub fn with_duration(self, duration: Timestamp) -> Self {
+        let dur = duration.with_time_base(self.time_base);
+
+        unsafe { ffw_packet_set_duration(self.ptr, dur.timestamp()) }
 
         self
     }
@@ -273,6 +291,22 @@ impl Packet {
         let dts = dts.with_time_base(self.time_base);
 
         unsafe { ffw_packet_set_dts(self.ptr, dts.timestamp()) }
+
+        self
+    }
+
+    /// Get the packet duration.
+    pub fn duration(&self) -> Timestamp {
+        let time = unsafe { ffw_packet_get_duration(self.ptr) };
+
+        Timestamp::new(time, self.time_base)
+    }
+
+    /// Set the packet duration.
+    pub fn with_duration(self, duration: Timestamp) -> Self {
+        let dur = duration.with_time_base(self.time_base);
+
+        unsafe { ffw_packet_set_duration(self.ptr, dur.timestamp()) }
 
         self
     }

@@ -82,6 +82,14 @@ int ffw_packet_get_size(const AVPacket* packet) {
     return packet->size;
 }
 
+int64_t ffw_packet_get_duration(const AVPacket* packet) {
+    return packet->duration;
+}
+
+void ffw_packet_set_duration(AVPacket* packet, int64_t duration) {
+    packet->duration = duration;
+}
+
 uint8_t* ffw_packet_get_data(AVPacket* packet) {
     return packet->data;
 }
