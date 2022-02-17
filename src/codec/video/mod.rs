@@ -121,8 +121,14 @@ impl VideoDecoderBuilder {
     }
 
     /// Try to enable hardware acceleration
-    pub fn enable_hardware_accel(self) -> Self {
+    pub fn with_hardware_accel(self) -> Self {
         let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
+
+        self
+    }
+
+    pub fn with_multithread(self) -> Self {
+        unsafe { super::ffw_decoder_enable_multithread(self.ptr) };
 
         self
     }

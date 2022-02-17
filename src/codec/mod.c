@@ -209,6 +209,7 @@ Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int size);
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value);
 int ffw_decoder_open(Decoder* decoder);
+void ffw_decoder_enable_multithread(Decoder* decoder);
 int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder);
 int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet);
 void ffw_decoder_flush_buffers(Decoder* decoder);
@@ -299,6 +300,23 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     }
 
     return 0;
+}
+
+void ffw_decoder_enable_multithread(Decoder* decoder) {
+    fprintf(stderr, "[ffw decoder] Turning on multithreading\n");
+    // set codec to automatically determine how many threads suits best for the decoding job
+    decoder->cc->thread_count = 0;
+
+    if (decoder->decoder->capabilities | AV_CODEC_CAP_FRAME_THREADS) {
+        fprintf(stderr, "[ffw decoder] AV_CODEC_CAP_FRAME_THREADS\n");
+        decoder->cc->thread_type = FF_THREAD_FRAME;
+    } else if (decoder->decoder->capabilities | AV_CODEC_CAP_SLICE_THREADS) {
+        fprintf(stderr, "[ffw decoder] AV_CODEC_CAP_SLICE_THREADS\n");
+        decoder->cc->thread_type = FF_THREAD_SLICE;
+    } else {
+        fprintf(stderr, "[ffw decoder] No multithreading :( 1 thread only\n");
+        decoder->cc->thread_count = 1; //don't use multithreading
+    }
 }
 
 Decoder* ffw_decoder_new(const char* codec) {
@@ -455,16 +473,16 @@ int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
     }
 
     // Use hardware decoding if enabled
-    if (decoder->use_hwaccel && decoder->frame->format == decoder->hw_pix_fmt) {
-        /* retrieve data from GPU to CPU */
-        if ((ret = av_hwframe_transfer_data(decoder->sw_frame, decoder->frame, 0)) < 0) {
-            fprintf(stderr, "Error transferring the data to system memory\n");
-            return -1;
-        }
-        *frame = av_frame_clone(decoder->sw_frame);
-    } else {
+    // if (decoder->use_hwaccel && decoder->frame->format == decoder->hw_pix_fmt) {
+    //     /* retrieve data from GPU to CPU */
+    //     if ((ret = av_hwframe_transfer_data(decoder->sw_frame, decoder->frame, 0)) < 0) {
+    //         fprintf(stderr, "Error transferring the data to system memory\n");
+    //         return -1;
+    //     }
+    //     *frame = av_frame_clone(decoder->sw_frame);
+    // } else {
         *frame = av_frame_clone(decoder->frame);
-    }
+    // }
 
     return 1;
 }

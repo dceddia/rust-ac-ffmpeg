@@ -62,6 +62,7 @@ extern "C" {
     ) -> c_int;
     fn ffw_decoder_set_pkt_timebase(decoder: *mut c_void, num: c_int, den: c_int);
     fn ffw_decoder_open(decoder: *mut c_void) -> c_int;
+    fn ffw_decoder_enable_multithread(decoder: *mut c_void);
     fn ffw_decoder_hwaccel_autoselect_device(decoder: *mut c_void) -> c_int;
     fn ffw_decoder_push_packet(decoder: *mut c_void, packet: *const c_void) -> c_int;
     fn ffw_decoder_take_frame(decoder: *mut c_void, frame: *mut *mut c_void) -> c_int;
