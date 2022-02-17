@@ -8,7 +8,8 @@ use std::{
 };
 
 extern "C" {
-    fn ffw_rescale_q(n: i64, aq_num: u32, aq_den: u32, bq_num: u32, bq_den: u32) -> i64;
+    fn ffw_rescale_rnd(n: i64, aq_num: u32, aq_den: u32, bq_num: u32, bq_den: u32, rnd: u32)
+        -> i64;
     fn ffw_null_timestamp() -> i64;
 }
 
@@ -43,6 +44,32 @@ impl TimeBase {
 impl Debug for TimeBase {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         write!(f, "{}/{}", self.num(), self.den())
+    }
+}
+
+pub enum Rounding {
+    /// Round toward zero.
+    Zero,
+    /// Round away from zero.
+    Inf,
+    /// Round down (toward -infinity).
+    Down,
+    /// Round up (toward +infinity).
+    Up,
+    /// Round to nearest. Halfway cases are rounded away from zero.
+    NearInf,
+}
+
+impl Rounding {
+    pub fn into_raw(self) -> u32 {
+        match self {
+            Rounding::Zero => 0,
+            Rounding::Inf => 1,
+            Rounding::Down => 2,
+            Rounding::Up => 3,
+            // NB: ffmpeg doesn't use #4
+            Rounding::NearInf => 5,
+        }
     }
 }
 
@@ -111,16 +138,23 @@ impl Timestamp {
 
     /// Rescale the timestamp value to a given time base.
     pub fn with_time_base(&self, time_base: TimeBase) -> Self {
+        self.with_time_base_rounded(time_base, Rounding::Zero)
+    }
+
+    /// Rescale the timestamp value to a given time base
+    /// using the specified rounding method.
+    pub fn with_time_base_rounded(&self, time_base: TimeBase, rnd: Rounding) -> Self {
         let timestamp = if self.is_null() {
             self.timestamp
         } else {
             unsafe {
-                ffw_rescale_q(
+                ffw_rescale_rnd(
                     self.timestamp,
                     self.time_base.num,
                     self.time_base.den,
                     time_base.num,
                     time_base.den,
+                    rnd.into_raw(),
                 )
             }
         };
