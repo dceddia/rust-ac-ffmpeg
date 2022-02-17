@@ -39,6 +39,15 @@ impl TimeBase {
     pub fn den(&self) -> u32 {
         self.den
     }
+
+    /// Get the value as a decimal, num/den. Returns 0.0 if den is 0.
+    pub fn decimal(&self) -> f64 {
+        if self.den == 0 {
+            return 0.0;
+        }
+
+        self.num as f64 / self.den as f64
+    }
 }
 
 impl Debug for TimeBase {
