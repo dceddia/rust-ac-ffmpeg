@@ -11,7 +11,10 @@ use std::{
     str::FromStr,
 };
 
-use crate::time::{TimeBase, Timestamp};
+use crate::{
+    codec::AVFrame,
+    time::{TimeBase, Timestamp},
+};
 
 extern "C" {
     fn ffw_get_pixel_format_by_name(name: *const c_char) -> c_int;
@@ -492,6 +495,16 @@ impl VideoFrame {
     /// Get raw pointer.
     pub(crate) fn as_ptr(&self) -> *const c_void {
         self.ptr
+    }
+}
+
+impl AVFrame for VideoFrame {
+    fn pts(&self) -> Timestamp {
+        self.pts()
+    }
+
+    fn with_pts(self, pts: Timestamp) -> Self {
+        self.with_pts(pts)
     }
 }
 

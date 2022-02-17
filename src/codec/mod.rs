@@ -17,6 +17,7 @@ use crate::{
         video::PixelFormat,
     },
     packet::Packet,
+    time::Timestamp,
     Error,
 };
 
@@ -843,6 +844,11 @@ impl From<InnerCodecParameters> for OtherCodecParameters {
     }
 }
 
+pub trait AVFrame {
+    fn pts(&self) -> Timestamp;
+    fn with_pts(self, pts: Timestamp) -> Self;
+}
+
 /// A media decoder.
 ///
 /// # Common decoder operation
@@ -853,7 +859,7 @@ impl From<InnerCodecParameters> for OtherCodecParameters {
 /// 5. Take all frames from the decoder until you get None.
 pub trait Decoder {
     type CodecParameters;
-    type Frame;
+    type Frame: AVFrame + Send;
 
     /// Get codec parameters.
     fn codec_parameters(&self) -> Self::CodecParameters;
