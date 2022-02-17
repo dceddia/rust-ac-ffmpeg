@@ -1,4 +1,5 @@
 #include <libavcodec/avcodec.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/channel_layout.h>
 
 static const AVCodec* ffw_find_codec(const char* name, int type) {
