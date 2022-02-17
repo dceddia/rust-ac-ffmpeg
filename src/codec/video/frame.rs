@@ -31,6 +31,7 @@ extern "C" {
     fn ffw_frame_get_line_size(frame: *const c_void, plane: usize) -> usize;
     fn ffw_frame_get_line_count(frame: *const c_void, plane: usize) -> usize;
     fn ffw_frame_get_pkt_duration(frame: *const c_void) -> i64;
+    fn ffw_frame_get_repeat_pict(frame: *const c_void) -> c_int;
     fn ffw_frame_clone(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_free(frame: *mut c_void);
 }
@@ -398,6 +399,11 @@ impl VideoFrameMut {
         unsafe { ffw_frame_get_pkt_duration(self.ptr) }
     }
 
+    /// Get the repeat_pict value of the frame, to know if it should be extended
+    pub fn repeat(&self) -> i32 {
+        unsafe { ffw_frame_get_repeat_pict(self.ptr) }
+    }
+
     /// Make the frame immutable.
     pub fn freeze(mut self) -> VideoFrame {
         let ptr = self.ptr;
@@ -490,6 +496,10 @@ impl VideoFrame {
     /// Get the duration of the corresponding packet
     pub fn duration(&self) -> i64 {
         unsafe { ffw_frame_get_pkt_duration(self.ptr) }
+
+    /// Get the repeat_pict value of the frame, to know if it should be extended
+    pub fn repeat(&self) -> i32 {
+        unsafe { ffw_frame_get_repeat_pict(self.ptr) }
     }
 
     /// Get raw pointer.

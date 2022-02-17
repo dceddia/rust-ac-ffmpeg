@@ -189,3 +189,7 @@ uint8_t* ffw_frame_get_plane_data(AVFrame* frame, size_t index) {
 int64_t ffw_frame_get_pkt_duration(AVFrame *frame) {
     return frame->pkt_duration;
 }
+
+int ffw_frame_get_repeat_pict(AVFrame *frame) {
+    return frame->repeat_pict;
+}
