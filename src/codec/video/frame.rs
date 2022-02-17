@@ -494,8 +494,11 @@ impl VideoFrame {
     }
 
     /// Get the duration of the corresponding packet
-    pub fn duration(&self) -> i64 {
-        unsafe { ffw_frame_get_pkt_duration(self.ptr) }
+    pub fn duration(&self) -> Timestamp {
+        let time = unsafe { ffw_frame_get_pkt_duration(self.ptr) };
+
+        Timestamp::new(time, self.time_base)
+    }
 
     /// Get the repeat_pict value of the frame, to know if it should be extended
     pub fn repeat(&self) -> i32 {
