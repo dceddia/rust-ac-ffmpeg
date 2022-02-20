@@ -361,6 +361,10 @@ Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
     res->cc = NULL;
     res->frame = NULL;
     res->sw_frame = NULL;
+    res->hwdevice = NULL;
+    res->hwaccel_device_type = AV_HWDEVICE_TYPE_NONE;
+    res->use_hwaccel = 0;
+    res->hw_pix_fmt = AV_PIX_FMT_NONE;
 
     res->cc = avcodec_alloc_context3(decoder);
     if (res->cc == NULL) {
