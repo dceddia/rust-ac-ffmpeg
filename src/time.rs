@@ -14,7 +14,7 @@ extern "C" {
 }
 
 /// A rational time base (e.g. 1/1000 is a millisecond time base).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct TimeBase {
     num: u32,
     den: u32,
