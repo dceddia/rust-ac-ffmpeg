@@ -73,6 +73,16 @@ impl ChannelLayout {
         layout
     }
 
+    /// Create an invalid channel layout
+    pub fn invalid() -> Self {
+        Self::from_raw(0)
+    }
+
+    /// Get whether this is a valid channel layout or not
+    pub fn is_valid(&self) -> bool {
+        self.0 != 0
+    }
+
     /// Get default channel layout for a given number of channels.
     pub fn from_channels(channels: u32) -> Option<Self> {
         let layout = unsafe { ffw_get_default_channel_layout(channels as _) };
