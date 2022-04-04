@@ -439,7 +439,18 @@ pub struct AudioFrame {
 impl AudioFrame {
     /// Create a new audio frame from its raw representation.
     pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
-        AudioFrame { ptr, time_base }
+        let mut frame = AudioFrame { ptr, time_base };
+
+        if !frame.channel_layout().is_valid()
+            || frame.channel_layout().channels() != frame.channels()
+        {
+            frame.set_channel_layout(
+                ChannelLayout::from_channels(frame.channels())
+                    .unwrap_or_else(|| ChannelLayout::invalid()),
+            );
+        }
+
+        frame
     }
 
     /// Get frame sample format.
