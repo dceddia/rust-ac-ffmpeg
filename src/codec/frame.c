@@ -150,6 +150,10 @@ uint64_t ffw_frame_get_channel_layout(const AVFrame* frame) {
     return frame->channel_layout;
 }
 
+void ffw_frame_set_channel_layout(AVFrame* frame, uint64_t layout) {
+    frame->channel_layout = layout;
+}
+
 int64_t ffw_frame_get_pts(const AVFrame* frame) {
     return frame->pts;
 }

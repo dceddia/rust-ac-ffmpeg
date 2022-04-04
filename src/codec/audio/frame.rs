@@ -36,6 +36,7 @@ extern "C" {
     fn ffw_frame_get_sample_rate(frame: *const c_void) -> c_int;
     fn ffw_frame_get_channels(frame: *const c_void) -> c_int;
     fn ffw_frame_get_channel_layout(frame: *const c_void) -> u64;
+    fn ffw_frame_set_channel_layout(frame: *const c_void, layout: u64);
     fn ffw_frame_get_pts(frame: *const c_void) -> i64;
     fn ffw_frame_set_pts(frame: *mut c_void, pts: i64);
     fn ffw_frame_get_plane_data(frame: *mut c_void, index: usize) -> *mut u8;
@@ -464,6 +465,11 @@ impl AudioFrame {
     /// Get number of channels.
     pub fn channels(&self) -> u32 {
         unsafe { ffw_frame_get_channels(self.ptr) as _ }
+    }
+
+    /// Set the channel layout
+    fn set_channel_layout(&mut self, layout: ChannelLayout) {
+        unsafe { ffw_frame_set_channel_layout(self.ptr, layout.into_raw()) };
     }
 
     /// Get channel layout.
