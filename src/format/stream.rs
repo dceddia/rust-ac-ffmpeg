@@ -16,6 +16,7 @@ extern "C" {
     fn ffw_stream_get_start_time(stream: *const c_void) -> i64;
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
     fn ffw_stream_get_nb_frames(stream: *const c_void) -> i64;
+    fn ffw_stream_get_r_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
     fn ffw_stream_get_codec_parameters(stream: *const c_void) -> *mut c_void;
     fn ffw_stream_set_metadata(
         stream: *mut c_void,
@@ -59,6 +60,16 @@ impl Stream {
 
     pub fn set_frame_rate_guess(&mut self, guess: Option<TimeBase>) {
         self.frame_rate_guess = guess;
+    }
+
+    /// Get the r_frame_rate
+    pub fn r_frame_rate(&self) -> TimeBase {
+        let mut num = 0_u32;
+        let mut den = 0_u32;
+
+        unsafe { ffw_stream_get_r_frame_rate(self.ptr, &mut num, &mut den) };
+
+        TimeBase::new(num, den)
     }
 
     /// Get the stream's index.
