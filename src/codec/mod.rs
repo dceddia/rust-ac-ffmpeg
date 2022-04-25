@@ -60,6 +60,8 @@ extern "C" {
         key: *const c_char,
         value: *const c_char,
     ) -> c_int;
+    fn ffw_decoder_set_thread_count(decoder: *mut c_void, count: c_int);
+    fn ffw_decoder_set_thread_type(decoder: *mut c_void, thread_type: c_int);
     fn ffw_decoder_set_pkt_timebase(decoder: *mut c_void, num: c_int, den: c_int);
     fn ffw_decoder_open(decoder: *mut c_void) -> c_int;
     fn ffw_decoder_hwaccel_autoselect_device(decoder: *mut c_void) -> c_int;
@@ -777,6 +779,14 @@ impl From<InnerCodecParameters> for VideoCodecParameters {
     fn from(params: InnerCodecParameters) -> Self {
         Self { inner: params }
     }
+}
+
+/// The kind of multithreading strategy to use
+pub enum ThreadType {
+    /// Decode one frame per thread
+    Frame = 1,
+    /// Break each frame into slices, and decode one slice per thread.
+    Slice = 2,
 }
 
 /// Subtitle codec parameters.

@@ -18,6 +18,8 @@ pub use self::{
     scaler::{VideoFrameScaler, VideoFrameScalerBuilder},
 };
 
+use super::ThreadType;
+
 /// Builder for the video decoder.
 pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
@@ -116,6 +118,30 @@ impl VideoDecoderBuilder {
         if res < 0 {
             panic!("unable to allocate extradata");
         }
+
+        self
+    }
+
+    /// Set the number of threads to use while decoding
+    /// Default is 1. Set to 0 to let FFmpeg decide how many threads to use.
+    pub fn with_thread_count(self, count: i32) -> Self {
+        let _ = unsafe { super::ffw_decoder_set_thread_count(self.ptr, count) };
+
+        self
+    }
+
+    /// The thread type to use, either Frame (one thread per frame) or Slice
+    /// (break each frame into slices, and use one thread per slice).
+    ///
+    /// Note: using the Frame type will cause decoded frames to be delayed by
+    /// N-1, where N is the number of threads.
+    pub fn with_thread_type(self, thread_type: ThreadType) -> Self {
+        let thread_type = match thread_type {
+            ThreadType::Frame => 1,
+            ThreadType::Slice => 2,
+        };
+
+        let _ = unsafe { super::ffw_decoder_set_thread_count(self.ptr, thread_type) };
 
         self
     }

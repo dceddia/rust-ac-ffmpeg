@@ -208,6 +208,8 @@ Decoder* ffw_decoder_new(const char* codec);
 Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int size);
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value);
+void ffw_decoder_set_thread_count(Decoder* decoder, int count);
+void ffw_decoder_set_thread_type(Decoder* decoder, int type);
 int ffw_decoder_open(Decoder* decoder);
 int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder);
 int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet);
@@ -418,6 +420,14 @@ int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int si
 
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value) {
     return av_dict_set(&decoder->options, key, value, 0);
+}
+
+void ffw_decoder_set_thread_count(Decoder* decoder, int count) {
+    decoder->cc->thread_count = count;
+}
+
+void ffw_decoder_set_thread_type(Decoder* decoder, int type) {
+    decoder->cc->thread_type = type;
 }
 
 void ffw_decoder_set_pkt_timebase(Decoder* decoder, int num, int den) {
