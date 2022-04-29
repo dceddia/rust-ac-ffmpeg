@@ -141,7 +141,7 @@ impl VideoDecoderBuilder {
             ThreadType::Slice => 2,
         };
 
-        let _ = unsafe { super::ffw_decoder_set_thread_count(self.ptr, thread_type) };
+        let _ = unsafe { super::ffw_decoder_set_thread_type(self.ptr, thread_type) };
 
         self
     }
