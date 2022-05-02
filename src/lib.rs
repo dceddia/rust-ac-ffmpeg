@@ -40,8 +40,9 @@ extern "C" {
 extern "C" fn log_callback(level: c_int, message: *const c_char) {
     let msg = unsafe { CStr::from_ptr(message as _) };
 
+    // level 40 is VERBOSE
     // level 32 and lower is INFO, WARNING or higher in terms of FFmpeg
-    if level <= 32 {
+    if level <= 40 {
         LOG_CALLBACK
             .read()
             .unwrap()
