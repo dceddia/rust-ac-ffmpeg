@@ -50,6 +50,9 @@ fn ffmpeg_include_dirs() -> Vec<PathBuf> {
         }
     }
 
+    panic!("FFMPEG_INCLUDE_DIR is not set, or isn't a directory");
+
+    /*
     let lib = Config::new()
         .cargo_metadata(false)
         .env_metadata(false)
@@ -59,6 +62,7 @@ fn ffmpeg_include_dirs() -> Vec<PathBuf> {
         .expect("Unable to find FFmpeg include dir. You can specify it explicitly by setting the FFMPEG_INCLUDE_DIR environment variable.");
 
     lib.include_paths
+    */
 }
 
 fn ffmpeg_lib_dirs() -> Vec<PathBuf> {
@@ -70,6 +74,9 @@ fn ffmpeg_lib_dirs() -> Vec<PathBuf> {
         }
     }
 
+    panic!("FFMPEG_LIB_DIR is not set, or isn't a directory");
+
+    /*
     let lib = Config::new()
         .cargo_metadata(false)
         .env_metadata(false)
@@ -79,6 +86,7 @@ fn ffmpeg_lib_dirs() -> Vec<PathBuf> {
         .expect("Unable to find FFmpeg lib dir. You can specify it explicitly by setting the FFMPEG_LIB_DIR environment variable.");
 
     lib.link_paths
+    */
 }
 
 fn link_static(lib: &str) {
