@@ -77,6 +77,7 @@ extern "C" {
     fn ffw_encoder_get_pixel_format(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_width(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_height(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_max_b_frames(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_sample_format(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_sample_rate(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_channel_layout(encoder: *const c_void) -> u64;
@@ -86,6 +87,7 @@ extern "C" {
     fn ffw_encoder_set_pixel_format(encoder: *mut c_void, format: c_int);
     fn ffw_encoder_set_width(encoder: *mut c_void, width: c_int);
     fn ffw_encoder_set_height(encoder: *mut c_void, height: c_int);
+    fn ffw_encoder_set_max_b_frames(encoder: *mut c_void, max_b_frames: c_int);
     fn ffw_encoder_set_sample_format(encoder: *mut c_void, format: c_int);
     fn ffw_encoder_set_sample_rate(encoder: *mut c_void, sample_rate: c_int);
     fn ffw_encoder_set_channel_layout(encoder: *mut c_void, channel_layout: u64);

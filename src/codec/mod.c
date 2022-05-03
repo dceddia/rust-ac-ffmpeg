@@ -537,6 +537,7 @@ Encoder* ffw_encoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_encoder_get_pixel_format(const Encoder* encoder);
 int ffw_encoder_get_width(const Encoder* encoder);
 int ffw_encoder_get_height(const Encoder* encoder);
+int ffw_encoder_get_max_b_frames(const Encoder* encoder);
 int ffw_encoder_get_sample_format(const Encoder* encoder);
 int ffw_encoder_get_sample_rate(const Encoder* encoder);
 uint64_t ffw_encoder_get_channel_layout(const Encoder* encoder);
@@ -545,6 +546,7 @@ void ffw_encoder_set_bit_rate(Encoder* encoder, int64_t bit_rate);
 void ffw_encoder_set_pixel_format(Encoder* encoder, int format);
 void ffw_encoder_set_width(Encoder* encoder, int width);
 void ffw_encoder_set_height(Encoder* encoder, int height);
+void ffw_encoder_set_max_b_frames(Encoder* encoder, int max_b_frames);
 void ffw_encoder_set_sample_format(Encoder* encoder, int format);
 void ffw_encoder_set_sample_rate(Encoder* encoder, int sample_rate);
 void ffw_encoder_set_channel_layout(Encoder* encoder, uint64_t channel_layout);
@@ -660,6 +662,10 @@ int ffw_encoder_get_height(const Encoder* encoder) {
     return encoder->cc->height;
 }
 
+int ffw_encoder_get_max_b_frames(const Encoder* encoder) {
+    return encoder->cc->max_b_frames;
+}
+
 
 int ffw_encoder_get_sample_format(const Encoder* encoder) {
     return encoder->cc->sample_fmt;
@@ -696,6 +702,10 @@ void ffw_encoder_set_width(Encoder* encoder, int width) {
 
 void ffw_encoder_set_height(Encoder* encoder, int height) {
     encoder->cc->height = height;
+}
+
+void ffw_encoder_set_max_b_frames(Encoder* encoder, int max_b_frames) {
+    encoder->cc->max_b_frames = max_b_frames;
 }
 
 void ffw_encoder_set_sample_format(Encoder* encoder, int format) {

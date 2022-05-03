@@ -311,6 +311,7 @@ pub struct VideoEncoderBuilder {
     format: Option<PixelFormat>,
     width: Option<usize>,
     height: Option<usize>,
+    max_b_frames: Option<usize>,
 }
 
 impl VideoEncoderBuilder {
@@ -336,6 +337,7 @@ impl VideoEncoderBuilder {
             format: None,
             width: None,
             height: None,
+            max_b_frames: None,
         };
 
         Ok(res)
@@ -352,11 +354,13 @@ impl VideoEncoderBuilder {
         let pixel_format;
         let width;
         let height;
+        let max_b_frames;
 
         unsafe {
             pixel_format = PixelFormat::from_raw(super::ffw_encoder_get_pixel_format(ptr));
             width = super::ffw_encoder_get_width(ptr) as _;
             height = super::ffw_encoder_get_height(ptr) as _;
+            max_b_frames = super::ffw_encoder_get_max_b_frames(ptr) as _;
         }
 
         let res = Self {
@@ -367,6 +371,7 @@ impl VideoEncoderBuilder {
             format: Some(pixel_format),
             width: Some(width),
             height: Some(height),
+            max_b_frames: Some(max_b_frames),
         };
 
         Ok(res)
@@ -424,6 +429,12 @@ impl VideoEncoderBuilder {
         self
     }
 
+    /// Set maximum number of B frames (defaults to 0).
+    pub fn max_b_frames(mut self, max: usize) -> Self {
+        self.max_b_frames = Some(max);
+        self
+    }
+
     /// Build the encoder.
     pub fn build(mut self) -> Result<VideoEncoder, Error> {
         let format = self
@@ -432,6 +443,7 @@ impl VideoEncoderBuilder {
 
         let width = self.width.ok_or_else(|| Error::new("width not set"))?;
         let height = self.height.ok_or_else(|| Error::new("height not set"))?;
+        let max_b_frames = self.max_b_frames.unwrap_or(0);
 
         let tb = self.time_base;
 
@@ -440,6 +452,7 @@ impl VideoEncoderBuilder {
             super::ffw_encoder_set_pixel_format(self.ptr, format.into_raw());
             super::ffw_encoder_set_width(self.ptr, width as _);
             super::ffw_encoder_set_height(self.ptr, height as _);
+            super::ffw_encoder_set_max_b_frames(self.ptr, max_b_frames as _);
 
             if super::ffw_encoder_open(self.ptr) != 0 {
                 return Err(Error::new("unable to build the encoder"));
