@@ -1,7 +1,6 @@
 use std::{env, path::PathBuf};
 
 use cc::Build;
-use pkg_config::Config;
 
 fn main() {
     let mut build = Build::new();
