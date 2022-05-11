@@ -79,6 +79,14 @@ impl AudioDecoderBuilder {
         self
     }
 
+    /// Set the number of threads to use while decoding
+    /// Default is 1. Set to 0 to let FFmpeg decide how many threads to use.
+    pub fn with_thread_count(self, count: i32) -> Self {
+        let _ = unsafe { super::ffw_decoder_set_thread_count(self.ptr, count) };
+
+        self
+    }
+
     /// Set decoder time base (all input packets will be rescaled into this
     /// time base). The default time base is in microseconds.
     pub fn time_base(mut self, time_base: TimeBase) -> Self {
