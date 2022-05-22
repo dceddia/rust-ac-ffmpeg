@@ -316,11 +316,12 @@ impl<'a> DerefMut for PlanesMut<'a> {
 pub struct VideoFrameMut {
     ptr: *mut c_void,
     time_base: TimeBase,
+    is_blank: bool,
 }
 
 impl VideoFrameMut {
     /// Create a black video frame. The time base of the frame will be in
-    /// microseconds.
+    /// microseconds and will have `is_blank` set to false.
     pub fn black(pixel_format: PixelFormat, width: usize, height: usize) -> Self {
         let ptr = unsafe { ffw_frame_new_black(pixel_format.into_raw(), width as _, height as _) };
 
@@ -331,6 +332,7 @@ impl VideoFrameMut {
         VideoFrameMut {
             ptr,
             time_base: TimeBase::MICROSECONDS,
+            is_blank: false,
         }
     }
 
@@ -366,6 +368,19 @@ impl VideoFrameMut {
         self.time_base = time_base;
 
         self
+    }
+
+    /// Set whether this frame is blank or not.
+    pub fn with_is_blank(mut self, blank: bool) -> Self {
+        self.is_blank = blank;
+        self
+    }
+
+    /// Get whether this frame is blank
+    /// NOTE: VideoFrameMut::black does _not_ set is_blank to true. This is
+    /// a user-controlled flag.
+    pub fn is_blank(&self) -> bool {
+        self.is_blank
     }
 
     /// Get presentation timestamp.
@@ -413,6 +428,7 @@ impl VideoFrameMut {
         VideoFrame {
             ptr,
             time_base: self.time_base,
+            is_blank: self.is_blank,
         }
     }
 }
@@ -430,12 +446,17 @@ unsafe impl Sync for VideoFrameMut {}
 pub struct VideoFrame {
     ptr: *mut c_void,
     time_base: TimeBase,
+    is_blank: bool,
 }
 
 impl VideoFrame {
     /// Create a new video frame from its raw representation.
     pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
-        Self { ptr, time_base }
+        Self {
+            ptr,
+            time_base,
+            is_blank: false,
+        }
     }
 
     /// Get frame pixel format.
@@ -505,6 +526,13 @@ impl VideoFrame {
         unsafe { ffw_frame_get_repeat_pict(self.ptr) }
     }
 
+    /// Get whether this frame is blank
+    /// NOTE: VideoFrameMut::black does _not_ set is_blank to true. This is
+    /// a user-controlled flag.
+    pub fn is_blank(&self) -> bool {
+        self.is_blank
+    }
+
     /// Get raw pointer.
     pub(crate) fn as_ptr(&self) -> *const c_void {
         self.ptr
@@ -532,6 +560,7 @@ impl Clone for VideoFrame {
         Self {
             ptr,
             time_base: self.time_base,
+            is_blank: self.is_blank,
         }
     }
 }
