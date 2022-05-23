@@ -437,12 +437,12 @@ pub struct AudioCodecParametersBuilder {
 impl AudioCodecParametersBuilder {
     /// Create a new builder for a given audio codec.
     fn new(codec: &str) -> Result<Self, Error> {
-        let codec = CString::new(codec).expect("invalid codec name");
+        let codec_str = CString::new(codec).expect("invalid codec name");
 
-        let ptr = unsafe { ffw_audio_codec_parameters_new(codec.as_ptr() as *const _) };
+        let ptr = unsafe { ffw_audio_codec_parameters_new(codec_str.as_ptr() as *const _) };
 
         if ptr.is_null() {
-            return Err(Error::new("unknown codec"));
+            return Err(Error::new(format!("unknown codec {}", codec)));
         }
 
         let params = unsafe { InnerCodecParameters::from_raw_ptr(ptr) };
@@ -615,12 +615,12 @@ pub struct VideoCodecParametersBuilder {
 impl VideoCodecParametersBuilder {
     /// Create a new builder for a given video codec.
     fn new(codec: &str) -> Result<Self, Error> {
-        let codec = CString::new(codec).expect("invalid codec name");
+        let codec_str = CString::new(codec).expect("invalid codec name");
 
-        let ptr = unsafe { ffw_video_codec_parameters_new(codec.as_ptr() as *const _) };
+        let ptr = unsafe { ffw_video_codec_parameters_new(codec_str.as_ptr() as *const _) };
 
         if ptr.is_null() {
-            return Err(Error::new("unknown codec"));
+            return Err(Error::new(format!("unknown codec {}", codec)));
         }
 
         let params = unsafe { InnerCodecParameters::from_raw_ptr(ptr) };
@@ -799,12 +799,12 @@ pub struct SubtitleCodecParameters {
 
 impl SubtitleCodecParameters {
     pub fn new(codec: &str) -> Result<Self, Error> {
-        let codec = CString::new(codec).expect("invalid codec name");
+        let codec_str = CString::new(codec).expect("invalid codec name");
 
-        let ptr = unsafe { ffw_subtitle_codec_parameters_new(codec.as_ptr() as *const _) };
+        let ptr = unsafe { ffw_subtitle_codec_parameters_new(codec_str.as_ptr() as *const _) };
 
         if ptr.is_null() {
-            return Err(Error::new("unknown codec"));
+            return Err(Error::new(format!("unknown codec {}", codec)));
         }
 
         let params = unsafe { InnerCodecParameters::from_raw_ptr(ptr) };

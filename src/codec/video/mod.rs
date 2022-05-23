@@ -38,12 +38,12 @@ impl VideoDecoderBuilder {
 
     /// Create a new builder for a given codec.
     fn new(codec: &str) -> Result<Self, Error> {
-        let codec = CString::new(codec).expect("invalid codec name");
+        let codec_str = CString::new(codec).expect("invalid codec name");
 
-        let ptr = unsafe { super::ffw_decoder_new(codec.as_ptr() as _) };
+        let ptr = unsafe { super::ffw_decoder_new(codec_str.as_ptr() as _) };
 
         if ptr.is_null() {
-            return Err(Error::new("unknown codec"));
+            return Err(Error::new(format!("unknown codec {}", codec)));
         }
 
         unsafe { Ok(Self::from_raw_ptr(ptr)) }
@@ -317,12 +317,12 @@ pub struct VideoEncoderBuilder {
 impl VideoEncoderBuilder {
     /// Create a new encoder builder for a given codec.
     fn new(codec: &str) -> Result<Self, Error> {
-        let codec = CString::new(codec).expect("invalid codec name");
+        let codec_str = CString::new(codec).expect("invalid codec name");
 
-        let ptr = unsafe { super::ffw_encoder_new(codec.as_ptr() as _) };
+        let ptr = unsafe { super::ffw_encoder_new(codec_str.as_ptr() as _) };
 
         if ptr.is_null() {
-            return Err(Error::new("unknown codec"));
+            return Err(Error::new(format!("unknown codec {}", codec)));
         }
 
         unsafe {
