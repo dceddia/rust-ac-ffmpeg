@@ -49,6 +49,7 @@ extern "C" {
         den_out: *mut u32,
     ) -> c_int;
     fn ffw_demuxer_get_nb_streams(demuxer: *const c_void) -> c_uint;
+    fn ffw_demuxer_get_duration(demuxer: *const c_void) -> i64;
     fn ffw_demuxer_get_stream(demuxer: *mut c_void, index: c_uint) -> *mut c_void;
     fn ffw_demuxer_read_frame(
         demuxer: *mut c_void,
@@ -356,6 +357,17 @@ impl<T> Demuxer<T> {
             Err(Error::new("could not get frame rate, invalid stream index"))
         } else {
             Ok(TimeBase::new(num, den))
+        }
+    }
+
+    /// Get the duration of the container
+    pub fn duration(&self) -> Timestamp {
+        let res = unsafe { ffw_demuxer_get_duration(self.ptr) };
+
+        if res == 0 {
+            Timestamp::null()
+        } else {
+            Timestamp::new(res, TimeBase::MICROSECONDS)
         }
     }
 
