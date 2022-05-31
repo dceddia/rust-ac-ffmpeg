@@ -69,6 +69,9 @@ impl Stream {
 
         unsafe { ffw_stream_get_r_frame_rate(self.ptr, &mut num, &mut den) };
 
+        // avoid division by zero
+        let den = if den > 0 { den } else { 1 };
+
         TimeBase::new(num, den)
     }
 
