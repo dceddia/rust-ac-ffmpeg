@@ -308,6 +308,7 @@ impl<'a> DerefMut for PlanesMut<'a> {
 pub struct AudioFrameMut {
     ptr: *mut c_void,
     time_base: TimeBase,
+    original_pts: Timestamp,
 }
 
 impl AudioFrameMut {
@@ -335,6 +336,7 @@ impl AudioFrameMut {
         Self {
             ptr,
             time_base: TimeBase::MICROSECONDS,
+            original_pts: Timestamp::null(),
         }
     }
 
@@ -408,8 +410,16 @@ impl AudioFrameMut {
         self
     }
 
+    /// Set the original presentation timestamp.
+    pub fn with_original_pts(mut self, pts: Timestamp) -> Self {
+        self.original_pts = pts;
+
+        self
+    }
+
     /// Make the frame immutable.
     pub fn freeze(mut self) -> AudioFrame {
+        let original_pts = self.pts();
         let ptr = self.ptr;
 
         self.ptr = ptr::null_mut();
@@ -417,6 +427,7 @@ impl AudioFrameMut {
         AudioFrame {
             ptr,
             time_base: self.time_base,
+            original_pts,
         }
     }
 }
@@ -434,12 +445,18 @@ unsafe impl Sync for AudioFrameMut {}
 pub struct AudioFrame {
     ptr: *mut c_void,
     time_base: TimeBase,
+    original_pts: Timestamp,
 }
 
 impl AudioFrame {
     /// Create a new audio frame from its raw representation.
     pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
-        let mut frame = AudioFrame { ptr, time_base };
+        let mut frame = AudioFrame {
+            ptr,
+            time_base,
+            original_pts: Timestamp::null(),
+        };
+        frame.original_pts = frame.pts();
 
         if !frame.channel_layout().is_valid()
             || frame.channel_layout().channels() != frame.channels()
@@ -507,6 +524,17 @@ impl AudioFrame {
         self
     }
 
+    /// Get original presentation timestamp.
+    pub fn original_pts(&self) -> Timestamp {
+        self.original_pts
+    }
+
+    /// Set original presentation timestamp.
+    pub fn with_original_pts(mut self, pts: Timestamp) -> Self {
+        self.original_pts = pts;
+        self
+    }
+
     /// Get presentation timestamp.
     pub fn pts(&self) -> Timestamp {
         let pts = unsafe { ffw_frame_get_pts(self.ptr) };
@@ -550,6 +578,7 @@ impl Clone for AudioFrame {
         Self {
             ptr,
             time_base: self.time_base,
+            original_pts: self.original_pts,
         }
     }
 }

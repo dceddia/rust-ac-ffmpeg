@@ -421,15 +421,19 @@ impl VideoFrameMut {
 
     /// Make the frame immutable.
     pub fn freeze(mut self) -> VideoFrame {
+        let original_pts = self.pts();
         let ptr = self.ptr;
 
         self.ptr = ptr::null_mut();
 
-        VideoFrame {
+        let frame = VideoFrame {
             ptr,
             time_base: self.time_base,
             is_blank: self.is_blank,
-        }
+            original_pts,
+        };
+
+        frame
     }
 }
 
@@ -447,16 +451,21 @@ pub struct VideoFrame {
     ptr: *mut c_void,
     time_base: TimeBase,
     is_blank: bool,
+    original_pts: Timestamp,
 }
 
 impl VideoFrame {
     /// Create a new video frame from its raw representation.
     pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
-        Self {
+        let mut frame = Self {
             ptr,
             time_base,
             is_blank: false,
-        }
+            original_pts: Timestamp::null(),
+        };
+
+        frame.original_pts = frame.pts();
+        frame
     }
 
     /// Get frame pixel format.
@@ -496,6 +505,11 @@ impl VideoFrame {
         self.time_base = time_base;
 
         self
+    }
+
+    /// Get original presentation timestamp. This is immutable.
+    pub fn original_pts(&self) -> Timestamp {
+        self.original_pts
     }
 
     /// Get presentation timestamp.
@@ -561,6 +575,7 @@ impl Clone for VideoFrame {
             ptr,
             time_base: self.time_base,
             is_blank: self.is_blank,
+            original_pts: self.original_pts,
         }
     }
 }
