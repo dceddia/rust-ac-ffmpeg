@@ -31,6 +31,12 @@ extern "C" {
         sample_rate: c_int,
         nb_samples: c_int,
     ) -> *mut c_void;
+    fn ffw_frame_new_uninitialized(
+        channel_layout: u64,
+        sample_fmt: c_int,
+        sample_rate: c_int,
+        nb_samples: c_int,
+    ) -> *mut c_void;
     fn ffw_frame_get_format(frame: *const c_void) -> c_int;
     fn ffw_frame_get_nb_samples(frame: *const c_void) -> c_int;
     fn ffw_frame_get_sample_rate(frame: *const c_void) -> c_int;
@@ -340,6 +346,34 @@ impl AudioFrameMut {
         }
     }
 
+    /// Create an audio frame containing uninitialized data. The time base of the frame
+    /// will be in microseconds.
+    pub fn uninitialized(
+        channel_layout: ChannelLayout,
+        sample_format: SampleFormat,
+        sample_rate: u32,
+        samples: usize,
+    ) -> Self {
+        let ptr = unsafe {
+            ffw_frame_new_uninitialized(
+                channel_layout.into_raw(),
+                sample_format.into_raw(),
+                sample_rate as _,
+                samples as _,
+            )
+        };
+
+        if ptr.is_null() {
+            panic!("unable to allocate an audio frame");
+        }
+
+        Self {
+            ptr,
+            time_base: TimeBase::MICROSECONDS,
+            original_pts: Timestamp::null(),
+        }
+    }
+
     /// Get frame sample format.
     pub fn sample_format(&self) -> SampleFormat {
         unsafe { SampleFormat::from_raw(ffw_frame_get_format(self.ptr)) }
@@ -399,6 +433,11 @@ impl AudioFrameMut {
         let pts = unsafe { ffw_frame_get_pts(self.ptr) };
 
         Timestamp::new(pts, self.time_base)
+    }
+
+    /// Get original presentation timestamp.
+    pub fn original_pts(&self) -> Timestamp {
+        self.original_pts
     }
 
     /// Set presentation timestamp.

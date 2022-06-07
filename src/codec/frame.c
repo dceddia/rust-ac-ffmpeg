@@ -46,10 +46,24 @@ int ffw_pixel_format_is_none(int format) {
 }
 
 AVFrame* ffw_frame_new_silence(uint64_t, int, int, int);
+AVFrame* ffw_frame_new_uninitialized(uint64_t, int, int, int);
 AVFrame* ffw_frame_new_black(int, int, int);
 void ffw_frame_free(AVFrame*);
 
 AVFrame* ffw_frame_new_silence(uint64_t channel_layout, int sample_fmt, int sample_rate, int nb_samples) {
+    AVFrame* frame = ffw_frame_new_uninitialized(channel_layout, sample_fmt, sample_rate, nb_samples);
+
+    if (frame == NULL) {
+        return NULL;
+    }
+    
+    int channels = av_get_channel_layout_nb_channels(channel_layout);
+    av_samples_set_silence(frame->extended_data, 0, nb_samples, channels, sample_fmt);
+
+    return frame;
+}
+
+AVFrame* ffw_frame_new_uninitialized(uint64_t channel_layout, int sample_fmt, int sample_rate, int nb_samples) {
     AVFrame* frame;
     int channels;
 
@@ -70,8 +84,6 @@ AVFrame* ffw_frame_new_silence(uint64_t channel_layout, int sample_fmt, int samp
     if (av_frame_get_buffer(frame, 0) != 0) {
         goto err;
     }
-
-    av_samples_set_silence(frame->extended_data, 0, nb_samples, channels, sample_fmt);
 
     return frame;
 
