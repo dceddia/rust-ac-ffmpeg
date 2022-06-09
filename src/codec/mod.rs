@@ -37,6 +37,7 @@ extern "C" {
     fn ffw_codec_parameters_get_height(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_sample_rate(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_channel_layout(params: *const c_void) -> u64;
+    fn ffw_codec_parameters_get_channels(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_extradata(params: *mut c_void) -> *mut c_void;
     fn ffw_codec_parameters_get_extradata_size(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_set_bit_rate(params: *mut c_void, bit_rate: i64);
@@ -575,9 +576,14 @@ impl AudioCodecParameters {
         unsafe { ffw_codec_parameters_get_sample_rate(self.inner.ptr) as _ }
     }
 
-    /// Get channel layout.
+    /// Get channel layout. This may be 0 (unknown) even when there are audio channels.
     pub fn channel_layout(&self) -> ChannelLayout {
         unsafe { ChannelLayout::from_raw(ffw_codec_parameters_get_channel_layout(self.inner.ptr)) }
+    }
+
+    /// Get the number of channels
+    pub fn channels(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_channels(self.inner.ptr) as _ }
     }
 
     /// Get extradata.

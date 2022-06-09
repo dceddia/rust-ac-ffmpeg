@@ -125,6 +125,10 @@ uint64_t ffw_codec_parameters_get_channel_layout(const AVCodecParameters* params
     return params->channel_layout;
 }
 
+int ffw_codec_parameters_get_channels(const AVCodecParameters* params) {
+    return params->channels;
+}
+
 uint8_t* ffw_codec_parameters_get_extradata(AVCodecParameters* params) {
     return params->extradata;
 }
