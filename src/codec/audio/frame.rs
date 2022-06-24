@@ -527,8 +527,9 @@ impl AudioFrame {
 
     /// Get the duration from the packet that produced this frame,
     /// in the stream time base.
-    pub fn pkt_duration(&self) -> i64 {
-        unsafe { ffw_frame_get_pkt_duration(self.ptr) as _ }
+    pub fn pkt_duration(&self) -> Timestamp {
+        let timestamp = unsafe { ffw_frame_get_pkt_duration(self.ptr) as _ };
+        Timestamp::new(timestamp, self.time_base)
     }
 
     /// Get sample data planes for this frame.
