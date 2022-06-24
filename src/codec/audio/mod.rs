@@ -204,6 +204,11 @@ impl AudioDecoder {
     pub fn builder(codec: &str) -> Result<AudioDecoderBuilder, Error> {
         AudioDecoderBuilder::new(codec)
     }
+
+    /// Get the time base of the underlying stream
+    pub fn time_base(&self) -> TimeBase {
+        self.time_base
+    }
 }
 
 impl Decoder for AudioDecoder {
