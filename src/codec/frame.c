@@ -154,6 +154,10 @@ int ffw_frame_get_nb_samples(const AVFrame* frame) {
     return frame->nb_samples;
 }
 
+int64_t ffw_frame_get_pkt_duration(const AVFrame* frame) {
+    return frame->pkt_duration;
+}
+
 int ffw_frame_get_channels(const AVFrame* frame) {
     return frame->channels;
 }
@@ -200,10 +204,6 @@ size_t ffw_frame_get_line_count(const AVFrame* frame, size_t plane) {
 
 uint8_t* ffw_frame_get_plane_data(AVFrame* frame, size_t index) {
     return frame->extended_data[index];
-}
-
-int64_t ffw_frame_get_pkt_duration(AVFrame *frame) {
-    return frame->pkt_duration;
 }
 
 int ffw_frame_get_repeat_pict(AVFrame *frame) {

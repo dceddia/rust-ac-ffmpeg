@@ -39,6 +39,7 @@ extern "C" {
     ) -> *mut c_void;
     fn ffw_frame_get_format(frame: *const c_void) -> c_int;
     fn ffw_frame_get_nb_samples(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_pkt_duration(frame: *const c_void) -> i64;
     fn ffw_frame_get_sample_rate(frame: *const c_void) -> c_int;
     fn ffw_frame_get_channels(frame: *const c_void) -> c_int;
     fn ffw_frame_get_channel_layout(frame: *const c_void) -> u64;
@@ -522,6 +523,12 @@ impl AudioFrame {
     /// Get number of samples (per channel) in this frame.
     pub fn samples(&self) -> usize {
         unsafe { ffw_frame_get_nb_samples(self.ptr) as _ }
+    }
+
+    /// Get the duration from the packet that produced this frame,
+    /// in the stream time base.
+    pub fn pkt_duration(&self) -> i64 {
+        unsafe { ffw_frame_get_pkt_duration(self.ptr) as _ }
     }
 
     /// Get sample data planes for this frame.
