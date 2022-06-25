@@ -12,7 +12,7 @@ typedef struct AudioResampler {
     int target_frame_samples;
     int source_sample_rate;
     int tmp_frame_capacity;
-    int min_compensation_samples;
+    int min_compensation;
 
     int64_t source_samples;
     int64_t expected_source_pts;
@@ -73,7 +73,7 @@ AudioResampler* ffw_audio_resampler_new(
     uint64_t source_channel_layout,
     int source_sample_format,
     int source_sample_rate,
-    int min_compensation_samples) {
+    int min_compensation) {
     AudioResampler* res = malloc(sizeof(AudioResampler));
     if (!res) {
         return NULL;
@@ -90,7 +90,7 @@ AudioResampler* ffw_audio_resampler_new(
     res->target_frame_samples = target_frame_samples;
     res->source_sample_rate = source_sample_rate;
     res->tmp_frame_capacity = 0;
-    res->min_compensation_samples = min_compensation_samples;
+    res->min_compensation = min_compensation;
 
     res->source_samples = 0;
     res->expected_source_pts = 0;
@@ -138,40 +138,36 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
     }
 
     if (frame) {
-        // If soft compensation was requested via min_compensation_samples, apply it here.
-        if (resampler->min_compensation_samples > 0) {
-            // set the initial pts expectation
-            if (resampler->source_samples == 0) {
-                resampler->expected_source_pts = frame->pts;
-                resampler->input_pts_offset = frame->pts;
-                resampler->output_pts_offset = frame->pts
-                    * resampler->target_sample_rate
-                    / resampler->source_sample_rate;
-            }
-
-            int pts_delta = frame->pts - resampler->expected_source_pts;
-
-            if (pts_delta > resampler->min_compensation_samples) {
-                // insert a given number of silence samples if there is a gap
-                ret = swr_inject_silence(resampler->resample_context, pts_delta);
-
-                if (ret < 0) {
-                    return ret;
-                }
-            } else if (pts_delta < -resampler->min_compensation_samples) {
-                // drop a given number of samples
-                ret = swr_drop_output(
-                    resampler->resample_context,
-                    -pts_delta * resampler->target_sample_rate / resampler->source_sample_rate);
-
-                if (ret < 0) {
-                    return ret;
-                }
-            }
-
-            resampler->source_samples += frame->nb_samples + pts_delta;
-            resampler->expected_source_pts = resampler->input_pts_offset + resampler->source_samples;
+        
+        // set the initial pts expectation
+        if (resampler->source_samples == 0) {
+            resampler->expected_source_pts = frame->pts;
+            resampler->input_pts_offset = frame->pts;
+            resampler->output_pts_offset = frame->pts
+                * resampler->target_sample_rate
+                / resampler->source_sample_rate;
         }
+
+        // NOTE: The frame's PTS is in samples here, because
+        // the Rust caller converts the PTS to samples before calling this.
+        int64_t pts_delta = frame->pts - resampler->expected_source_pts;
+        
+        // If soft compensation was requested via min_compensation, apply it here.
+        if (resampler->min_compensation > 0) {
+            if (pts_delta > resampler->min_compensation || pts_delta < -resampler->min_compensation) {
+                int over_how_long = 0.05 * resampler->target_sample_rate;
+                printf("Compensating by %lld samples at PTS %lld\n", pts_delta, frame->pts);
+                ret = swr_set_compensation(resampler->resample_context, pts_delta, over_how_long);
+                if (ret < 0) {
+                    return ret;
+                }
+            } else {
+                pts_delta = 0;
+            }
+        }
+
+        resampler->source_samples += frame->nb_samples + pts_delta;
+        resampler->expected_source_pts = resampler->input_pts_offset + resampler->source_samples;
 
         required_capacity = swr_get_out_samples(
             resampler->resample_context,
