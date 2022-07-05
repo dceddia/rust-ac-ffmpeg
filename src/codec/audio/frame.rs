@@ -466,6 +466,15 @@ impl AudioFrameMut {
             original_pts,
         }
     }
+
+    /// Get mutable plane data.
+    pub fn data_mut(&mut self, plane_index: usize) -> &mut [u8] {
+        unsafe {
+            let line_size = ffw_frame_get_line_size(self.ptr, 0) as _;
+            let data = ffw_frame_get_plane_data(self.ptr, plane_index as _);
+            slice::from_raw_parts_mut(data, line_size)
+        }
+    }
 }
 
 impl Drop for AudioFrameMut {
@@ -597,6 +606,15 @@ impl AudioFrame {
     /// Get raw pointer.
     pub(crate) fn as_ptr(&self) -> *const c_void {
         self.ptr
+    }
+
+    /// Get plane data.
+    pub fn data(&self, plane_index: usize) -> &[u8] {
+        unsafe {
+            let line_size = ffw_frame_get_line_size(self.ptr, 0) as _;
+            let data = ffw_frame_get_plane_data(self.ptr, plane_index as _);
+            slice::from_raw_parts(data, line_size)
+        }
     }
 }
 
