@@ -239,17 +239,13 @@ fn get_audio_planes<'a>(
 ) -> Vec<Plane<'a>> {
     let line_size = unsafe { ffw_frame_get_line_size(frame, 0) as _ };
 
-    let mut inner = Vec::new();
-
     if sample_format.is_planar() {
-        for i in 0..channels {
-            inner.push(Plane::new(frame, i, line_size));
-        }
+        (0..channels)
+            .map(|i| Plane::new(frame, i, line_size))
+            .collect()
     } else {
-        inner.push(Plane::new(frame, 0, line_size));
+        vec![Plane::new(frame, 0, line_size)]
     }
-
-    inner
 }
 
 /// A collection of audio planes. This type can be dereferenced into a slice of
