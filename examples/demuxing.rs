@@ -51,7 +51,7 @@ fn print_info(input: &str) -> Result<(), Error> {
     }
 
     println!("\nSeeking to START + 5s...");
-    demuxer.seek_to_timestamp(Timestamp::from_secs(5), SeekTarget::From)?;
+    demuxer.seek_to_timestamp(&Timestamp::from_secs(5), SeekTarget::From)?;
 
     println!("\nPackets:");
 
