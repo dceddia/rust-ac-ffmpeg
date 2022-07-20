@@ -1,3 +1,5 @@
+#include <libavutil/common.h>
+#include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 
 typedef struct AudioResampler {
@@ -10,6 +12,7 @@ typedef struct AudioResampler {
     int target_sample_format;
     int target_sample_rate;
     int target_frame_samples;
+    AVRational source_time_base;
     int source_sample_rate;
     int tmp_frame_capacity;
     int min_compensation;
@@ -61,7 +64,7 @@ AudioResampler* ffw_audio_resampler_new(
     uint64_t source_channel_layout,
     int source_sample_format,
     int source_sample_rate,
-    int min_compensation_samples);
+    int enable_compensation);
 
 void ffw_audio_resampler_free(AudioResampler* resampler);
 
@@ -73,7 +76,7 @@ AudioResampler* ffw_audio_resampler_new(
     uint64_t source_channel_layout,
     int source_sample_format,
     int source_sample_rate,
-    int min_compensation) {
+    int enable_compensation) {
     AudioResampler* res = malloc(sizeof(AudioResampler));
     if (!res) {
         return NULL;
@@ -89,8 +92,8 @@ AudioResampler* ffw_audio_resampler_new(
     res->target_sample_rate = target_sample_rate;
     res->target_frame_samples = target_frame_samples;
     res->source_sample_rate = source_sample_rate;
+    res->source_time_base = (AVRational){1, source_sample_rate};
     res->tmp_frame_capacity = 0;
-    res->min_compensation = min_compensation;
 
     res->source_samples = 0;
     res->expected_source_pts = 0;
@@ -111,6 +114,12 @@ AudioResampler* ffw_audio_resampler_new(
         source_sample_rate,
         0,
         NULL);
+
+    if(enable_compensation) {
+        av_opt_set_double(res->resample_context, "min_comp", 1.0 / source_sample_rate, 0);
+        av_opt_set_double(res->resample_context, "min_hard_comp", 0.1, 0);
+        av_opt_set_double(res->resample_context, "max_soft_comp", 0.1, 0);
+    }
 
     if (!res->resample_context) {
         goto err;
@@ -138,37 +147,6 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
     }
 
     if (frame) {
-        
-        // set the initial pts expectation
-        if (resampler->source_samples == 0) {
-            resampler->expected_source_pts = frame->pts;
-            resampler->input_pts_offset = frame->pts;
-            resampler->output_pts_offset = frame->pts
-                * resampler->target_sample_rate
-                / resampler->source_sample_rate;
-        }
-
-        // NOTE: The frame's PTS is in samples here, because
-        // the Rust caller converts the PTS to samples before calling this.
-        int64_t pts_delta = frame->pts - resampler->expected_source_pts;
-        
-        // If soft compensation was requested via min_compensation, apply it here.
-        if (resampler->min_compensation > 0) {
-            if (pts_delta > resampler->min_compensation || pts_delta < -resampler->min_compensation) {
-                int over_how_long = 0.05 * resampler->target_sample_rate;
-                printf("Compensating by %lld samples at PTS %lld\n", pts_delta, frame->pts);
-                ret = swr_set_compensation(resampler->resample_context, pts_delta, over_how_long);
-                if (ret < 0) {
-                    return ret;
-                }
-            } else {
-                pts_delta = 0;
-            }
-        }
-
-        resampler->source_samples += frame->nb_samples + pts_delta;
-        resampler->expected_source_pts = resampler->input_pts_offset + resampler->source_samples;
-
         required_capacity = swr_get_out_samples(
             resampler->resample_context,
             frame->nb_samples);
@@ -211,20 +189,18 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
         return ret;
     }
 
-    // Compute the resampled PTS
-    AVRational from_timebase;
-    from_timebase.num = 1;
-    from_timebase.den = resampler->source_sample_rate;
-    AVRational to_timebase;
-    to_timebase.num = 1;
-    to_timebase.den = resampler->target_sample_rate;
-    int next_pts = av_rescale_q(
-        frame->pts,
-        from_timebase,
-        to_timebase
-    );
-        
-    resampler->tmp_frame->pts = next_pts;
+    // Set the PTS on the output frame
+    if(frame->pts != AV_NOPTS_VALUE) {
+        int64_t orig_pts = av_rescale(
+            frame->pts,
+            resampler->source_time_base.num * (int64_t)resampler->target_sample_rate * resampler->source_sample_rate,
+            resampler->source_time_base.den);
+
+        int64_t new_pts = swr_next_pts(resampler->resample_context, orig_pts);
+        resampler->tmp_frame->pts = ROUNDED_DIV(new_pts, resampler->source_sample_rate);
+    } else {
+        resampler->tmp_frame->pts = AV_NOPTS_VALUE;
+    }
 
     return 1;
 }

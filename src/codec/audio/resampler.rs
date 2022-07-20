@@ -23,7 +23,7 @@ extern "C" {
         source_channel_layout: u64,
         source_sample_format: c_int,
         source_sample_rate: c_int,
-        min_compensation_samples: c_int,
+        enable_compensation: c_int,
     ) -> *mut c_void;
     fn ffw_audio_resampler_free(resampler: *mut c_void);
     fn ffw_audio_resampler_push_frame(resampler: *mut c_void, frame: *const c_void) -> c_int;
@@ -41,7 +41,7 @@ pub struct AudioResamplerBuilder {
     target_sample_rate: Option<u32>,
 
     target_frame_samples: Option<usize>,
-    min_compensation_samples: Option<usize>,
+    enable_compensation: Option<bool>,
 }
 
 impl AudioResamplerBuilder {
@@ -57,7 +57,7 @@ impl AudioResamplerBuilder {
             target_sample_rate: None,
 
             target_frame_samples: None,
-            min_compensation_samples: None,
+            enable_compensation: None,
         }
     }
 
@@ -104,11 +104,10 @@ impl AudioResamplerBuilder {
         self
     }
 
-    /// Set the minimum number of samples to trigger a soft compensation.
-    /// Audio frames will be stretched or squeezed to match their PTS timestamps
-    /// if the number of samples is off by at least this number.
-    pub fn min_compensation_samples(mut self, samples: Option<usize>) -> Self {
-        self.min_compensation_samples = samples;
+    /// Turn compensation on or off.
+    /// Audio frames will be stretched/squeezed or padded/trimmed to match their PTS timestamps.
+    pub fn with_compensation(mut self, enabled: bool) -> Self {
+        self.enable_compensation = Some(enabled);
         self
     }
 
@@ -135,7 +134,7 @@ impl AudioResamplerBuilder {
             .ok_or_else(|| Error::new("target sample rate was not set"))?;
 
         let target_frame_samples = self.target_frame_samples.unwrap_or(0);
-        let min_compensation_samples = self.min_compensation_samples.unwrap_or(0);
+        let enable_compensation = self.enable_compensation.unwrap_or(false);
 
         let ptr = unsafe {
             ffw_audio_resampler_new(
@@ -146,7 +145,7 @@ impl AudioResamplerBuilder {
                 source_channel_layout.into_raw(),
                 source_sample_format.into_raw(),
                 source_sample_rate as _,
-                min_compensation_samples as _,
+                enable_compensation as _,
             )
         };
 
