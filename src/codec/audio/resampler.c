@@ -115,14 +115,16 @@ AudioResampler* ffw_audio_resampler_new(
         0,
         NULL);
 
+    if (!res->resample_context) {
+        goto err;
+    }
+
     if(enable_compensation) {
         av_opt_set_double(res->resample_context, "min_comp", 1.0 / source_sample_rate, 0);
         av_opt_set_double(res->resample_context, "min_hard_comp", 0.1, 0);
-        av_opt_set_double(res->resample_context, "max_soft_comp", 0.1, 0);
-    }
-
-    if (!res->resample_context) {
-        goto err;
+        // Found that turning on "max_soft_comp" slows down resampling drastically,
+        // and the compensation seems to come out correctly without it.
+        // av_opt_set_double(res->resample_context, "max_soft_comp", 0.05, 0);
     }
 
     if (swr_init(res->resample_context) < 0) {
