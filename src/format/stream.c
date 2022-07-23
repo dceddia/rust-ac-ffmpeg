@@ -6,6 +6,7 @@ int ffw_stream_get_index(const AVStream* stream);
 int64_t ffw_stream_get_start_time(const AVStream* stream);
 int64_t ffw_stream_get_duration(const AVStream* stream);
 int64_t ffw_stream_get_nb_frames(const AVStream* stream);
+void ffw_stream_set_discard(AVStream* stream, int discard);
 AVCodecParameters* ffw_stream_get_codec_parameters(const AVStream* stream);
 int ffw_stream_set_metadata(AVStream* stream, const char* key, const char* value);
 
@@ -33,6 +34,10 @@ int64_t ffw_stream_get_duration(const AVStream* stream) {
 
 int64_t ffw_stream_get_nb_frames(const AVStream* stream) {
     return stream->nb_frames;
+}
+
+void ffw_stream_set_discard(AVStream* stream, int discard) {
+    stream->discard = discard;
 }
 
 AVCodecParameters* ffw_stream_get_codec_parameters(const AVStream* stream) {

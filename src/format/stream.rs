@@ -17,6 +17,7 @@ extern "C" {
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
     fn ffw_stream_get_nb_frames(stream: *const c_void) -> i64;
     fn ffw_stream_get_r_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
+    fn ffw_stream_set_discard(stream: *mut c_void, discard: c_int);
     fn ffw_stream_get_codec_parameters(stream: *const c_void) -> *mut c_void;
     fn ffw_stream_set_metadata(
         stream: *mut c_void,
@@ -24,6 +25,31 @@ extern "C" {
         value: *const c_char,
     ) -> c_int;
     fn ffw_stream_get_metadata(stream: *mut c_void, key: *const c_char) -> *const c_char;
+}
+
+/// Used to specify whether (and how) a stream's packets should be discarded while demuxing.
+pub enum Discard {
+    None,
+    Default,
+    NonRef,
+    BiDir,
+    NonIntra,
+    NonKey,
+    All,
+}
+impl Discard {
+    /// Get the internal raw representation.
+    fn into_raw(self) -> i32 {
+        match self {
+            Discard::None => -16,
+            Discard::Default => 0,
+            Discard::NonRef => 8,
+            Discard::BiDir => 16,
+            Discard::NonIntra => 24,
+            Discard::NonKey => 32,
+            Discard::All => 48,
+        }
+    }
 }
 
 /// Stream.
@@ -107,6 +133,11 @@ impl Stream {
         } else {
             Some(count as _)
         }
+    }
+
+    /// Set the discard flag for this stream.
+    pub fn set_discard(&mut self, discard: Discard) {
+        unsafe { ffw_stream_set_discard(self.ptr, discard.into_raw()) };
     }
 
     /// Get codec parameters.
