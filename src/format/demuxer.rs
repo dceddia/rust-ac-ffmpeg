@@ -18,6 +18,8 @@ use crate::{
     Error,
 };
 
+use super::stream::Discard;
+
 extern "C" {
     fn ffw_guess_input_format(
         short_name: *const c_char,
@@ -406,6 +408,25 @@ impl<T> DemuxerWithStreamInfo<T> {
     /// Get the underlying demuxer.
     pub fn into_demuxer(self) -> Demuxer<T> {
         self.inner
+    }
+
+    /// Set the discard flags on the streams such that packets
+    /// will only come from the desired stream.
+    pub fn read_single_stream(&mut self, stream_index: usize) {
+        for stream in &mut self.streams {
+            if stream.index() == stream_index {
+                stream.set_discard(Discard::Default);
+            } else {
+                stream.set_discard(Discard::All);
+            }
+        }
+    }
+
+    /// Reset the discard flags so that packets come from every stream.
+    pub fn read_all_streams(&mut self) {
+        for stream in &mut self.streams {
+            stream.set_discard(Discard::Default);
+        }
     }
 }
 
