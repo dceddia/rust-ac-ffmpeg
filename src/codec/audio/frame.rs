@@ -10,6 +10,8 @@ use std::{
     str::FromStr,
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     codec::AVFrame,
     time::{TimeBase, Timestamp},
@@ -66,6 +68,7 @@ impl std::error::Error for UnknownChannelLayout {}
 
 /// Channel layout.
 #[derive(Copy, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ChannelLayout(u64);
 
 impl ChannelLayout {
