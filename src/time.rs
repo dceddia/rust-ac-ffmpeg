@@ -1,5 +1,6 @@
 //! Time base aware timestamps.
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{Eq, Ordering, PartialEq, PartialOrd},
