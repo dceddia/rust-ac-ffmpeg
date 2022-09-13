@@ -201,7 +201,7 @@ impl VideoFrameScaler {
             panic!("unable to scale a frame");
         }
 
-        let frame = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base()) };
+        let frame = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) };
 
         Ok(frame)
     }

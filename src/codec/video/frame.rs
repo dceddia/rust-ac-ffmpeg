@@ -317,6 +317,7 @@ pub struct VideoFrameMut {
     ptr: *mut c_void,
     time_base: TimeBase,
     is_blank: bool,
+    rotation: f64,
 }
 
 impl VideoFrameMut {
@@ -333,6 +334,7 @@ impl VideoFrameMut {
             ptr,
             time_base: TimeBase::MICROSECONDS,
             is_blank: false,
+            rotation: 0.0,
         }
     }
 
@@ -404,6 +406,18 @@ impl VideoFrameMut {
         Planes::from(self)
     }
 
+    /// Get the rotation, in degrees. To display the frame right-side up,
+    /// the image needs to be rotated by this amount.
+    pub fn rotation(&self) -> f64 {
+        self.rotation
+    }
+
+    pub fn with_rotation(mut self, degrees: f64) -> Self {
+        self.rotation = degrees;
+
+        self
+    }
+
     /// Get mutable picture planes.
     pub fn planes_mut(&mut self) -> PlanesMut {
         PlanesMut::from(self)
@@ -431,6 +445,7 @@ impl VideoFrameMut {
             time_base: self.time_base,
             is_blank: self.is_blank,
             original_pts,
+            rotation: self.rotation,
         };
 
         frame
@@ -452,16 +467,22 @@ pub struct VideoFrame {
     time_base: TimeBase,
     is_blank: bool,
     original_pts: Timestamp,
+    rotation: f64,
 }
 
 impl VideoFrame {
     /// Create a new video frame from its raw representation.
-    pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
+    pub(crate) unsafe fn from_raw_ptr(
+        ptr: *mut c_void,
+        time_base: TimeBase,
+        rotation: f64,
+    ) -> Self {
         let mut frame = Self {
             ptr,
             time_base,
             is_blank: false,
             original_pts: Timestamp::null(),
+            rotation,
         };
 
         frame.original_pts = frame.pts();
@@ -491,6 +512,12 @@ impl VideoFrame {
     /// Get frame time base.
     pub fn time_base(&self) -> TimeBase {
         self.time_base
+    }
+
+    /// Get the rotation, in degrees. To display the frame right-side up,
+    /// the image needs to be rotated by this amount.
+    pub fn rotation(&self) -> f64 {
+        self.rotation
     }
 
     /// Set frame time base. (This will rescale the current timestamp into a
@@ -576,6 +603,7 @@ impl Clone for VideoFrame {
             time_base: self.time_base,
             is_blank: self.is_blank,
             original_pts: self.original_pts,
+            rotation: self.rotation,
         }
     }
 }

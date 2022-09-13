@@ -24,6 +24,7 @@ use super::ThreadType;
 pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
     time_base: TimeBase,
+    rotation: f64,
 }
 
 impl VideoDecoderBuilder {
@@ -33,7 +34,11 @@ impl VideoDecoderBuilder {
 
         super::ffw_decoder_set_pkt_timebase(ptr, time_base.num() as _, time_base.den() as _);
 
-        Self { ptr, time_base }
+        Self {
+            ptr,
+            time_base,
+            rotation: 0.0,
+        }
     }
 
     /// Create a new builder for a given codec.
@@ -153,6 +158,13 @@ impl VideoDecoderBuilder {
         self
     }
 
+    /// Set the rotation (in degrees)
+    pub fn rotation(mut self, degrees: f64) -> Self {
+        self.rotation = degrees;
+
+        self
+    }
+
     /// Build the decoder.
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
         unsafe {
@@ -168,6 +180,7 @@ impl VideoDecoderBuilder {
         let res = VideoDecoder {
             ptr,
             time_base: self.time_base,
+            rotation: self.rotation,
         };
 
         Ok(res)
@@ -187,6 +200,9 @@ unsafe impl Sync for VideoDecoderBuilder {}
 pub struct VideoDecoder {
     ptr: *mut c_void,
     time_base: TimeBase,
+
+    /// The rotation of the underlying stream, in degrees.
+    rotation: f64,
 }
 
 impl VideoDecoder {
@@ -217,7 +233,8 @@ impl VideoDecoder {
             })?;
 
         let builder = VideoDecoderBuilder::from_codec_parameters(&codec_parameters)?
-            .time_base(stream.time_base());
+            .time_base(stream.time_base())
+            .rotation(stream.rotation());
 
         Ok(builder)
     }
@@ -283,7 +300,11 @@ impl Decoder for VideoDecoder {
                     if fptr.is_null() {
                         panic!("no frame received")
                     } else {
-                        Ok(Some(VideoFrame::from_raw_ptr(fptr, self.time_base)))
+                        Ok(Some(VideoFrame::from_raw_ptr(
+                            fptr,
+                            self.time_base,
+                            self.rotation,
+                        )))
                     }
                 }
                 0 => Ok(None),
