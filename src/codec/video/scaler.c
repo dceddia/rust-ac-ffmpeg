@@ -32,6 +32,14 @@ static AVFrame* alloc_frame(int format, int width, int height) {
     frame->width = width;
     frame->height = height;
 
+    // Explicitly set the line size for RGBA frames, so that the resampler
+    // doesn't add any padding bytes for alignment.
+    // This might be a little slower but is easier to deal with because otherwise
+    // some frame sizes (e.g. 2310x1080) end up with padding bytes.
+    if(format == AV_PIX_FMT_RGBA) {
+        frame->linesize[0] = width * 4;
+    }
+
     if (av_frame_get_buffer(frame, 0) != 0) {
         av_frame_free(&frame);
     }
