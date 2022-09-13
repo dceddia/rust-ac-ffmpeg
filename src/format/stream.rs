@@ -17,6 +17,7 @@ extern "C" {
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
     fn ffw_stream_get_nb_frames(stream: *const c_void) -> i64;
     fn ffw_stream_get_r_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
+    fn ffw_stream_get_rotation(stream: *const c_void) -> f64;
     fn ffw_stream_set_discard(stream: *mut c_void, discard: c_int);
     fn ffw_stream_get_codec_parameters(stream: *const c_void) -> *mut c_void;
     fn ffw_stream_set_metadata(
@@ -99,6 +100,11 @@ impl Stream {
         let den = if den > 0 { den } else { 1 };
 
         TimeBase::new(num, den)
+    }
+
+    /// Get the stream's rotation, in degrees. (will be 0 for non-video streams)
+    pub fn rotation(&self) -> f64 {
+        unsafe { ffw_stream_get_rotation(self.ptr) }
     }
 
     /// Get the stream's index.
