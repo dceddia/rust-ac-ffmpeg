@@ -3,7 +3,7 @@
 use std::{
     borrow::{Borrow, BorrowMut},
     convert::TryInto,
-    ffi::CString,
+    ffi::{CStr, CString},
     io::Read,
     ops::{Deref, DerefMut},
     os::raw::{c_char, c_int, c_uint, c_void},
@@ -66,6 +66,7 @@ extern "C" {
         seek_target: c_int,
     ) -> c_int;
     fn ffw_demuxer_free(demuxer: *mut c_void);
+    fn ffw_demuxer_get_metadata(demuxer: *mut c_void, key: *const c_char) -> *const c_char;
 }
 
 /// Seek type/mode.
@@ -426,6 +427,20 @@ impl<T> DemuxerWithStreamInfo<T> {
     pub fn read_all_streams(&mut self) {
         for stream in &mut self.streams {
             stream.set_discard(Discard::Default);
+        }
+    }
+
+    /// Get global metadata.
+    pub fn get_metadata(&self, key: &str) -> Option<&'static str> {
+        let key = CString::new(key).expect("invalid metadata key");
+
+        let value = unsafe { ffw_demuxer_get_metadata(self.ptr, key.as_ptr()) };
+
+        if value.is_null() {
+            None
+        } else {
+            let value = unsafe { CStr::from_ptr(value as _) };
+            Some(value.to_str().unwrap())
         }
     }
 }
