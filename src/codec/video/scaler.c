@@ -10,18 +10,21 @@ typedef struct FrameScaler {
     int tformat;
     int twidth;
     int theight;
+
+    // Byte alignment of the lines of the output frames
+    int align;
 } FrameScaler;
 
 FrameScaler* ffw_frame_scaler_new(
     int sformat, int swidth, int sheight,
     int tformat, int twidth, int theight,
-    int flags);
+    int flags, int align);
 
 AVFrame* ffw_frame_scaler_scale(FrameScaler* scaler, const AVFrame* src);
 void ffw_frame_scaler_free(FrameScaler* scaler);
 int ffw_alg_id_to_flags(size_t id);
 
-static AVFrame* alloc_frame(int format, int width, int height) {
+static AVFrame* alloc_frame(int format, int width, int height, int align) {
     AVFrame* frame = av_frame_alloc();
 
     if (frame == NULL) {
@@ -32,15 +35,7 @@ static AVFrame* alloc_frame(int format, int width, int height) {
     frame->width = width;
     frame->height = height;
 
-    // Explicitly set the line size for RGBA frames, so that the resampler
-    // doesn't add any padding bytes for alignment.
-    // This might be a little slower but is easier to deal with because otherwise
-    // some frame sizes (e.g. 2310x1080) end up with padding bytes.
-    if(format == AV_PIX_FMT_RGBA) {
-        frame->linesize[0] = width * 4;
-    }
-
-    if (av_frame_get_buffer(frame, 0) != 0) {
+    if (av_frame_get_buffer(frame, align) != 0) {
         av_frame_free(&frame);
     }
 
@@ -50,7 +45,7 @@ static AVFrame* alloc_frame(int format, int width, int height) {
 FrameScaler* ffw_frame_scaler_new(
     int sformat, int swidth, int sheight,
     int tformat, int twidth, int theight,
-    int flags) {
+    int flags, int align) {
     FrameScaler* res = malloc(sizeof(FrameScaler));
     if (res == NULL) {
         return NULL;
@@ -62,6 +57,7 @@ FrameScaler* ffw_frame_scaler_new(
     res->tformat = tformat;
     res->twidth = twidth;
     res->theight = theight;
+    res->align = align;
 
     res->scale_context = sws_getContext(
         swidth, sheight, sformat,
@@ -86,7 +82,7 @@ AVFrame* ffw_frame_scaler_scale(FrameScaler* scaler, const AVFrame* src) {
         // reference to it, we need to drop it and create a new one
         av_frame_free(&scaler->frame);
 
-        scaler->frame = alloc_frame(scaler->tformat, scaler->twidth, scaler->theight);
+        scaler->frame = alloc_frame(scaler->tformat, scaler->twidth, scaler->theight, scaler->align);
 
         if (scaler->frame == NULL) {
             return NULL;

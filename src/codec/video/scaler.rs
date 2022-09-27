@@ -20,6 +20,7 @@ extern "C" {
         twidth: c_int,
         theight: c_int,
         flags: c_int,
+        align: c_int,
     ) -> *mut c_void;
 
     fn ffw_frame_scaler_scale(scaler: *mut c_void, src: *const c_void) -> *mut c_void;
@@ -59,6 +60,8 @@ pub struct VideoFrameScalerBuilder {
     theight: c_int,
 
     flags: c_int,
+
+    alignment: c_int,
 }
 
 impl VideoFrameScalerBuilder {
@@ -78,6 +81,9 @@ impl VideoFrameScalerBuilder {
             theight: 0,
 
             flags,
+
+            // Default alignment of `0` means libav will choose the optimal alignment
+            alignment: 0,
         }
     }
 
@@ -124,6 +130,18 @@ impl VideoFrameScalerBuilder {
         self
     }
 
+    /// Set the byte alignment of the output frame lines. The default is 0,
+    /// which means libav will choose an optimal alignment and the output frames
+    /// might have a line size that's larger than the image width.
+    ///
+    /// The extra padding can cause issues for some operations, like rotation.
+    /// Specifying an align of `1` will ensure no padding is added.
+    pub fn align(mut self, alignment: usize) -> Self {
+        self.alignment = alignment as _;
+
+        self
+    }
+
     /// Build the video frame scaler.
     pub fn build(self) -> Result<VideoFrameScaler, Error> {
         let tformat = self.tformat.unwrap_or(self.sformat);
@@ -151,6 +169,7 @@ impl VideoFrameScalerBuilder {
                 self.twidth,
                 self.theight,
                 self.flags,
+                self.alignment,
             )
         };
 

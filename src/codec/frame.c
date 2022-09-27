@@ -47,7 +47,7 @@ int ffw_pixel_format_is_none(int format) {
 
 AVFrame* ffw_frame_new_silence(uint64_t, int, int, int);
 AVFrame* ffw_frame_new_uninitialized(uint64_t, int, int, int);
-AVFrame* ffw_frame_new_black(int, int, int);
+AVFrame* ffw_frame_new_black(int, int, int, int);
 void ffw_frame_free(AVFrame*);
 
 AVFrame* ffw_frame_new_silence(uint64_t channel_layout, int sample_fmt, int sample_rate, int nb_samples) {
@@ -93,7 +93,7 @@ err:
     return NULL;
 }
 
-AVFrame* ffw_frame_new_black(int pixel_format, int width, int height) {
+AVFrame* ffw_frame_new_black(int pixel_format, int width, int height, int align) {
     AVFrame* frame;
     uint8_t* data[4];
     ptrdiff_t linesize[4];
@@ -108,7 +108,7 @@ AVFrame* ffw_frame_new_black(int pixel_format, int width, int height) {
     frame->width = width;
     frame->height = height;
 
-    if (av_frame_get_buffer(frame, 0) != 0) {
+    if (av_frame_get_buffer(frame, align) != 0) {
         goto err;
     }
 
