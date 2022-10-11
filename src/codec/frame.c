@@ -146,6 +146,18 @@ int ffw_frame_get_height(const AVFrame* frame) {
     return frame->height;
 }
 
+int ffw_frame_get_colorspace(const AVFrame* frame) {
+    return frame->colorspace;
+}
+
+int ffw_frame_get_color_transfer_characteristic(const AVFrame* frame) {
+    return frame->color_trc;
+}
+
+int ffw_frame_get_color_primaries(const AVFrame* frame) {
+    return frame->color_primaries;
+}
+
 int ffw_frame_get_sample_rate(const AVFrame* frame) {
     return frame->sample_rate;
 }

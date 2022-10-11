@@ -30,6 +30,9 @@ extern "C" {
     fn ffw_frame_get_format(frame: *const c_void) -> c_int;
     fn ffw_frame_get_width(frame: *const c_void) -> c_int;
     fn ffw_frame_get_height(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_color_primaries(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_color_transfer_characteristic(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_colorspace(frame: *const c_void) -> c_int;
     fn ffw_frame_get_pts(frame: *const c_void) -> i64;
     fn ffw_frame_set_pts(frame: *mut c_void, pts: i64);
     fn ffw_frame_get_plane_data(frame: *mut c_void, index: usize) -> *mut u8;
@@ -335,12 +338,7 @@ impl VideoFrameMut {
     ///
     /// For operations like rotation, padding bytes can cause problems.
     /// An `alignment` of `1` will avoid the padding.
-    pub fn black(
-        pixel_format: PixelFormat,
-        width: usize,
-        height: usize,
-        alignment: usize,
-    ) -> Self {
+    pub fn black(pixel_format: PixelFormat, width: usize, height: usize, alignment: usize) -> Self {
         let ptr = unsafe {
             ffw_frame_new_black(
                 pixel_format.into_raw(),
@@ -526,6 +524,21 @@ impl VideoFrame {
     /// Get frame height.
     pub fn height(&self) -> usize {
         unsafe { ffw_frame_get_height(self.ptr) as _ }
+    }
+
+    /// Get the colorspace (aka conversion matrix, but it's not actually a matrix, just an index into a table)
+    pub fn colorspace(&self) -> u32 {
+        unsafe { ffw_frame_get_colorspace(self.ptr) as _ }
+    }
+
+    /// Get the color transfer characteristic (aka transfer function)
+    pub fn color_transfer_characteristic(&self) -> u32 {
+        unsafe { ffw_frame_get_color_transfer_characteristic(self.ptr) as _ }
+    }
+
+    /// Get the color primaries
+    pub fn color_primaries(&self) -> u32 {
+        unsafe { ffw_frame_get_color_primaries(self.ptr) as _ }
     }
 
     /// Get picture planes.
