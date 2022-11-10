@@ -16,7 +16,7 @@ extern "C" {
 }
 
 /// A rational time base (e.g. 1/1000 is a millisecond time base).
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TimeBase {
     num: u32,
@@ -87,7 +87,7 @@ impl Rounding {
 
 /// A timestamp supporting various time bases. All comparisons are done within
 /// microsecond time base.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Timestamp {
     timestamp: i64,
