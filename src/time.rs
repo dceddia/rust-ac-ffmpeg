@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::{Eq, Ordering, PartialEq, PartialOrd},
     fmt::{self, Debug, Formatter},
-    ops::{Add, AddAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Neg, Sub, SubAssign},
     time::Duration,
 };
 
@@ -302,6 +302,14 @@ impl SubAssign<Duration> for Timestamp {
         self.timestamp -= Self::from_nanos(rhs.subsec_nanos() as i64)
             .with_time_base(self.time_base)
             .timestamp();
+    }
+}
+
+impl Neg for Timestamp {
+    type Output = Timestamp;
+
+    fn neg(self) -> Self::Output {
+        Timestamp::new(-self.timestamp(), self.time_base())
     }
 }
 
