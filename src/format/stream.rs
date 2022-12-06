@@ -13,6 +13,7 @@ use crate::{
 extern "C" {
     fn ffw_stream_get_time_base(stream: *const c_void, num: *mut u32, den: *mut u32);
     fn ffw_stream_get_index(stream: *const c_void) -> c_int;
+    fn ffw_stream_is_attached_pic(stream: *const c_void) -> c_int;
     fn ffw_stream_get_start_time(stream: *const c_void) -> i64;
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
     fn ffw_stream_get_nb_frames(stream: *const c_void) -> i64;
@@ -110,6 +111,12 @@ impl Stream {
     /// Get the stream's index.
     pub fn index(&self) -> usize {
         unsafe { ffw_stream_get_index(self.ptr) as _ }
+    }
+
+    /// Get whether the stream is an "attached picture", where it
+    /// only stores a single frame that's used as cover art or a thumbnail.
+    pub fn is_picture(&self) -> bool {
+        unsafe { ffw_stream_is_attached_pic(self.ptr) != 0 }
     }
 
     /// Get the pts of the first frame of the stream in presentation order.

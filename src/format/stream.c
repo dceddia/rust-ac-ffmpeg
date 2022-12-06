@@ -11,6 +11,8 @@ double ffw_stream_get_rotation(const AVStream* stream);
 void ffw_stream_set_discard(AVStream* stream, int discard);
 AVCodecParameters* ffw_stream_get_codec_parameters(const AVStream* stream);
 int ffw_stream_set_metadata(AVStream* stream, const char* key, const char* value);
+int ffw_stream_is_attached_pic(const AVStream* stream);
+
 
 void ffw_stream_get_time_base(const AVStream* stream, uint32_t* num, uint32_t* den) {
     *num = stream->time_base.num;
@@ -24,6 +26,10 @@ void ffw_stream_get_r_frame_rate(const AVStream* stream, uint32_t* num, uint32_t
 
 int ffw_stream_get_index(const AVStream* stream) {
     return stream->index;
+}
+
+int ffw_stream_is_attached_pic(const AVStream* stream) {
+    return stream->disposition & AV_DISPOSITION_ATTACHED_PIC;
 }
 
 int64_t ffw_stream_get_start_time(const AVStream* stream) {
