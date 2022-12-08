@@ -1,3 +1,4 @@
+#include <libavutil/avutil.h>
 #include <libavformat/avio.h>
 
 typedef int read_packet_t(void*, uint8_t*, int);
