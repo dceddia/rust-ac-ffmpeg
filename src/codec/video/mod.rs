@@ -151,7 +151,7 @@ impl VideoDecoderBuilder {
         self
     }
 
-    /// Try to enable hardware acceleration
+    /// Try to enable hardware acceleration. If this fails, decoding will automatically fall back to software.
     pub fn enable_hardware_accel(self) -> Self {
         let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
 
