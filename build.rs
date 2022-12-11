@@ -23,6 +23,7 @@ fn main() {
         .file("src/codec/frame.c")
         .file("src/codec/audio/resampler.c")
         .file("src/codec/video/scaler.c")
+        .file("src/render/gl_mac.c")
         .compile("ffwrapper");
 
     link_static("ffwrapper");

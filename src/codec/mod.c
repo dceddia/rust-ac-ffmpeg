@@ -416,13 +416,14 @@ int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
 
     // Use hardware decoding if enabled
     if (decoder->use_hwaccel) {
-        /* retrieve data from GPU to CPU */
-        if ((ret = av_hwframe_transfer_data(decoder->sw_frame, decoder->frame, 0)) < 0) {
-            fprintf(stderr, "Error transferring the data to system memory\n");
-            return -1;
-        }
-        av_frame_copy_props(decoder->sw_frame, decoder->frame);
-        *frame = av_frame_clone(decoder->sw_frame);
+        *frame = av_frame_clone(decoder->frame);
+        // /* retrieve data from GPU to CPU */
+        // if ((ret = av_hwframe_transfer_data(decoder->sw_frame, decoder->frame, 0)) < 0) {
+        //     fprintf(stderr, "Error transferring the data to system memory\n");
+        //     return -1;
+        // }
+        // av_frame_copy_props(decoder->sw_frame, decoder->frame);
+        // *frame = av_frame_clone(decoder->sw_frame);
     } else {
         *frame = av_frame_clone(decoder->frame);
     }
