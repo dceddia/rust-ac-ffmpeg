@@ -12,10 +12,11 @@ typedef struct RenderContext
   CVOpenGLTextureCacheRef textureCache;
   CVOpenGLTextureRef lumaTexture;
   CVOpenGLTextureRef chromaTexture;
+  GLuint textures[2];
 } RenderContext;
 
 RenderContext *gl_renderer_new();
-int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer);
+int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer, GLint sampler_y_location, GLint sampler_uv_location);
 // int gl_renderer_render(RenderContext *ctx, const void *context, CVPixelBufferRef pixelBuffer, uint num_textures, uint *textures);
 void cleanup_textures(RenderContext *ctx);
 void gl_renderer_free(RenderContext *ctx);
@@ -116,6 +117,8 @@ RenderContext *gl_renderer_new()
   gst_gl_context_cocoa_dump_pixel_format(pixelFormat);
   CVOpenGLTextureCacheCreate(kCFAllocatorDefault, NULL, glContext, pixelFormat, NULL, &ctx->textureCache);
 
+  glGenTextures(2, ctx->textures);
+
   ctx->pixbuf = NULL;
   ctx->lumaTexture = NULL;
   ctx->chromaTexture = NULL;
@@ -124,62 +127,80 @@ RenderContext *gl_renderer_new()
 }
 
 // Pass a frame to render, and an array of textures to render to (1 per plane)
-int gl_renderer_render_frame_using_iosurface(RenderContext *ctx, const void *context, const AVFrame *frame, uint num_textures, uint *textures)
+int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer, GLint sampler_y_location, GLint sampler_uv_location)
 {
   GLuint internal_formats[2] = {GL_R8, GL_RG8};
   GLenum formats[2] = {GL_RED, GL_RG};
-  // Get the pixel buffer from the frame
-  CVPixelBufferRelease(ctx->pixbuf);
-  ctx->pixbuf = (CVPixelBufferRef)frame->data[3];
-  CVPixelBufferRetain(ctx->pixbuf);
 
   // Get the underlying IOSurface
-  IOSurfaceRef surface = CVPixelBufferGetIOSurface(ctx->pixbuf);
-
+  IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixelBuffer);
   if (!surface)
   {
     return -1;
   }
 
-  bool is_planar = CVPixelBufferIsPlanar(ctx->pixbuf);
-  int num_planes = CVPixelBufferGetPlaneCount(ctx->pixbuf);
-  if (num_planes > 2 || num_planes > num_textures)
+  bool is_planar = CVPixelBufferIsPlanar(pixelBuffer);
+  int num_planes = CVPixelBufferGetPlaneCount(pixelBuffer);
+  if (num_planes != 2)
   {
+    printf("Expected 2 planes, got a pixel buffer with %d\n", num_planes);
     return -1;
   }
-  CVPixelBufferLockBaseAddress(ctx->pixbuf, kCVPixelBufferLock_ReadOnly);
-  printf("renderer got surface %p from pixbuf %p with base %p (planes %p, %p) - planar? %d num_planes? %d\n", surface, ctx->pixbuf,
-         CVPixelBufferGetBaseAddress(ctx->pixbuf),
-         CVPixelBufferGetBaseAddressOfPlane(ctx->pixbuf, 0),
-         CVPixelBufferGetBaseAddressOfPlane(ctx->pixbuf, 1),
-         is_planar,
-         num_planes);
-  CVPixelBufferUnlockBaseAddress(ctx->pixbuf, kCVPixelBufferLock_ReadOnly);
-  for (int plane = 0; plane < num_planes; plane++)
+
+  int plane = 0;
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_RECTANGLE_ARB, ctx->textures[0]);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glUniform1i(sampler_y_location, 0);
+
+  CGLContextObj glContext = CGLGetCurrentContext();
+  printf("Current context obj is %p\n", ctx);
+  CGLError err = CGLTexImageIOSurface2D(
+      glContext,
+      GL_TEXTURE_RECTANGLE_ARB,
+      GL_R8, // GL_R8 for first plane, GL_RG8 for second plane
+      IOSurfaceGetWidthOfPlane(surface, plane),
+      IOSurfaceGetHeightOfPlane(surface, plane),
+      GL_RED, // GL_RED for first plane, GL_RG for second plane
+      GL_UNSIGNED_BYTE,
+      surface,
+      plane);
+  if (err)
   {
-    printf("render plane %d\n", plane);
-    glBindTexture(GL_TEXTURE_RECTANGLE_ARB, textures[plane]);
+    fprintf(stderr, "Error in CGLTexImageIOSurface2D, plane 0: %d\n", err);
+  }
 
-    CGLContextObj ctx = CGLGetCurrentContext();
-    printf("Current context obj is %p\n", ctx);
-    CGLError err = CGLTexImageIOSurface2D(
-        ctx,
-        GL_TEXTURE_RECTANGLE_ARB,
-        internal_formats[plane], // GL_R8 for first plane, GL_RG8 for second plane
-        IOSurfaceGetWidthOfPlane(surface, plane),
-        IOSurfaceGetHeightOfPlane(surface, plane),
-        formats[plane], // GL_RED for first plane, GL_RG for second plane
-        GL_UNSIGNED_BYTE,
-        surface,
-        plane);
+  plane = 1;
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_RECTANGLE_ARB, ctx->textures[1]);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glUniform1i(sampler_uv_location, 1);
 
-    glBindTexture(GL_TEXTURE_RECTANGLE_ARB, 0);
+  err = CGLTexImageIOSurface2D(
+      glContext,
+      GL_TEXTURE_RECTANGLE_ARB,
+      GL_RG8, // GL_R8 for first plane, GL_RG8 for second plane
+      IOSurfaceGetWidthOfPlane(surface, plane),
+      IOSurfaceGetHeightOfPlane(surface, plane),
+      GL_RG, // GL_RED for first plane, GL_RG for second plane
+      GL_UNSIGNED_BYTE,
+      surface,
+      plane);
+  if (err)
+  {
+    fprintf(stderr, "Error in CGLTexImageIOSurface2D, plane 1: %d\n", err);
+  }
 
-    if (err != kCGLNoError)
-    {
-      fprintf(stderr, "Error in CGLTexImageIOSurface2D: %d\n", err);
-      return -1;
-    }
+  if (err != kCGLNoError)
+  {
+    fprintf(stderr, "Error in CGLTexImageIOSurface2D: %d\n", err);
+    return -1;
   }
 
   printf("done render\n");
@@ -197,68 +218,68 @@ const char printPixelFormatType(CVPixelBufferRef pixelBuffer)
   }
 }
 
-// Pass a frame to render, and an array of textures to render to (1 per plane)
-int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer)
-{
-  CVReturn err;
-  size_t width = CVPixelBufferGetWidth(pixelBuffer);
-  size_t height = CVPixelBufferGetHeight(pixelBuffer);
+// // Pass a frame to render, and an array of textures to render to (1 per plane)
+// int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer)
+// {
+//   CVReturn err;
+//   size_t width = CVPixelBufferGetWidth(pixelBuffer);
+//   size_t height = CVPixelBufferGetHeight(pixelBuffer);
 
-  printf("gl_renderer_render pixelBuffer is %p, format: ", pixelBuffer);
-  printPixelFormatType(pixelBuffer);
-  printf("\n");
-  if (!ctx->textureCache)
-  {
-    return -1;
-  }
+//   printf("gl_renderer_render pixelBuffer is %p, format: ", pixelBuffer);
+//   printPixelFormatType(pixelBuffer);
+//   printf("\n");
+//   if (!ctx->textureCache)
+//   {
+//     return -1;
+//   }
 
-  cleanup_textures(ctx);
+//   cleanup_textures(ctx);
 
-  // CVOpenGLESTextureCacheCreateTextureFromImage will create GLES texture
-  // optimally from CVImageBufferRef.
+//   // CVOpenGLESTextureCacheCreateTextureFromImage will create GLES texture
+//   // optimally from CVImageBufferRef.
 
-  // Y-plane
-  glActiveTexture(GL_TEXTURE0);
-  err = CVOpenGLTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
-                                                   ctx->textureCache,
-                                                   pixelBuffer,
-                                                   NULL,
-                                                   &ctx->lumaTexture);
-  if (err)
-  {
-    fprintf(stderr, "Error creating luma texture: %d\n", err);
-  }
-  else
-  {
-    printf("luma: success!\n");
-  }
+//   // Y-plane
+//   glActiveTexture(GL_TEXTURE0);
+//   err = CVOpenGLTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+//                                                    ctx->textureCache,
+//                                                    pixelBuffer,
+//                                                    NULL,
+//                                                    &ctx->lumaTexture);
+//   if (err)
+//   {
+//     fprintf(stderr, "Error creating luma texture: %d\n", err);
+//   }
+//   else
+//   {
+//     printf("luma: success!\n");
+//   }
 
-  glBindTexture(CVOpenGLTextureGetTarget(ctx->lumaTexture), CVOpenGLTextureGetName(ctx->lumaTexture));
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+//   glBindTexture(CVOpenGLTextureGetTarget(ctx->lumaTexture), CVOpenGLTextureGetName(ctx->lumaTexture));
+//   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+//   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-  // UV-plane
-  glActiveTexture(GL_TEXTURE1);
-  err = CVOpenGLTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
-                                                   ctx->textureCache,
-                                                   pixelBuffer,
-                                                   NULL,
-                                                   &ctx->chromaTexture);
-  if (err)
-  {
-    fprintf(stderr, "Error creating chroma texture: %d\n", err);
-  }
-  else
-  {
-    printf("chroma: success!\n");
-  }
+//   // UV-plane
+//   glActiveTexture(GL_TEXTURE1);
+//   err = CVOpenGLTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+//                                                    ctx->textureCache,
+//                                                    pixelBuffer,
+//                                                    NULL,
+//                                                    &ctx->chromaTexture);
+//   if (err)
+//   {
+//     fprintf(stderr, "Error creating chroma texture: %d\n", err);
+//   }
+//   else
+//   {
+//     printf("chroma: success!\n");
+//   }
 
-  glBindTexture(CVOpenGLTextureGetTarget(ctx->chromaTexture), CVOpenGLTextureGetName(ctx->chromaTexture));
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+//   glBindTexture(CVOpenGLTextureGetTarget(ctx->chromaTexture), CVOpenGLTextureGetName(ctx->chromaTexture));
+//   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+//   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-  return 0;
-}
+//   return 0;
+// }
 
 // Called every frame to clean up the previous textures
 void cleanup_textures(RenderContext *ctx)
