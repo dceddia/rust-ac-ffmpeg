@@ -12,8 +12,9 @@ use std::{
 extern "C" {
     fn ffw_rescale_rnd(n: i64, aq_num: u32, aq_den: u32, bq_num: u32, bq_den: u32, rnd: u32)
         -> i64;
-    fn ffw_null_timestamp() -> i64;
 }
+
+const AV_NOPTS_VALUE: i64 = (0x8000000000000000 as u64) as i64;
 
 /// A rational time base (e.g. 1/1000 is a millisecond time base).
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -97,11 +98,9 @@ pub struct Timestamp {
 impl Timestamp {
     /// Create a "null" timestamp (i.e. a timestamp set to the AV_NOPTS_VALUE).
     pub fn null() -> Self {
-        unsafe {
-            Self {
-                timestamp: ffw_null_timestamp(),
-                time_base: TimeBase::MICROSECONDS,
-            }
+        Self {
+            timestamp: AV_NOPTS_VALUE,
+            time_base: TimeBase::MICROSECONDS,
         }
     }
 
@@ -146,7 +145,7 @@ impl Timestamp {
     /// Check if this is the "null" timestamp (i.e. it is equal to the
     /// AV_NOPTS_VALUE).
     pub fn is_null(&self) -> bool {
-        unsafe { self.timestamp == ffw_null_timestamp() }
+        self.timestamp == AV_NOPTS_VALUE
     }
 
     /// Rescale the timestamp value to a given time base.
