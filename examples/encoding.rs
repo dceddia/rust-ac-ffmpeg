@@ -44,7 +44,7 @@ fn encode_black_video(
     let pixel_format = video::frame::get_pixel_format("yuv420p");
 
     // create a black video frame with a given resolution
-    let frame = VideoFrameMut::black(pixel_format, width as _, height as _).freeze();
+    let frame = VideoFrameMut::black(pixel_format, width as _, height as _, 0).freeze();
 
     // note: it is 1/fps
     let time_base = TimeBase::new(1, 25);
