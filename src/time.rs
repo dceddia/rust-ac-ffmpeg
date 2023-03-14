@@ -352,13 +352,15 @@ impl Eq for Timestamp {}
 
 impl PartialOrd for Timestamp {
     fn partial_cmp(&self, other: &Timestamp) -> Option<Ordering> {
-        if let Some(a) = self.as_micros() {
-            if let Some(b) = other.as_micros() {
-                return a.partial_cmp(&b);
-            }
+        if self.is_null() || other.is_null() {
+            None
+        } else {
+            let self_numer =
+                self.timestamp * self.time_base.num() as i64 * other.time_base.den() as i64;
+            let other_numer =
+                other.timestamp * other.time_base.num() as i64 * self.time_base.den() as i64;
+            self_numer.partial_cmp(&other_numer)
         }
-
-        None
     }
 }
 
