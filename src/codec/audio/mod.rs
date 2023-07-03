@@ -2,7 +2,6 @@
 
 pub mod frame;
 pub mod resampler;
-pub mod transcoder;
 
 use std::{ffi::CString, os::raw::c_void, ptr};
 
@@ -17,7 +16,6 @@ use crate::{
 pub use self::{
     frame::{AudioFrame, AudioFrameMut, ChannelLayout, SampleFormat},
     resampler::AudioResampler,
-    transcoder::AudioTranscoder,
 };
 
 /// Builder for the audio decoder.
