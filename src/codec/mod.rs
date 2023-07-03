@@ -562,18 +562,30 @@ impl AudioCodecParameters {
     }
 
     /// Get bit rate.
-    pub fn bit_rate(&self) -> u64 {
-        unsafe { ffw_codec_parameters_get_bit_rate(self.inner.ptr) as _ }
+    pub fn bit_rate(&self) -> Option<u64> {
+        let val = unsafe { ffw_codec_parameters_get_bit_rate(self.inner.ptr) as _ };
+        match val {
+            v if v <= 0 => None,
+            good_value => Some(good_value),
+        }
     }
 
     /// Get frame sample format.
-    pub fn sample_format(&self) -> SampleFormat {
-        unsafe { SampleFormat::from_raw(ffw_codec_parameters_get_format(self.inner.ptr)) }
+    pub fn sample_format(&self) -> Option<SampleFormat> {
+        let val = unsafe { ffw_codec_parameters_get_format(self.inner.ptr) };
+        match val {
+            v if v < 0 => None,
+            good_value => Some(SampleFormat::from_raw(good_value)),
+        }
     }
 
     /// Get sampling rate.
-    pub fn sample_rate(&self) -> u32 {
-        unsafe { ffw_codec_parameters_get_sample_rate(self.inner.ptr) as _ }
+    pub fn sample_rate(&self) -> Option<u32> {
+        let val = unsafe { ffw_codec_parameters_get_sample_rate(self.inner.ptr) as _ };
+        match val {
+            v if v <= 0 => None,
+            good_value => Some(good_value),
+        }
     }
 
     /// Get channel layout. This may be 0 (unknown) even when there are audio channels.
@@ -582,8 +594,12 @@ impl AudioCodecParameters {
     }
 
     /// Get the number of channels
-    pub fn channels(&self) -> u32 {
-        unsafe { ffw_codec_parameters_get_channels(self.inner.ptr) as _ }
+    pub fn channels(&self) -> Option<u32> {
+        let val = unsafe { ffw_codec_parameters_get_channels(self.inner.ptr) as _ };
+        match val {
+            v if v <= 0 => None,
+            good_value => Some(good_value),
+        }
     }
 
     /// Get extradata.
@@ -748,8 +764,12 @@ impl VideoCodecParameters {
     }
 
     /// Get frame pixel format.
-    pub fn pixel_format(&self) -> PixelFormat {
-        unsafe { PixelFormat::from_raw(ffw_codec_parameters_get_format(self.inner.ptr)) }
+    pub fn pixel_format(&self) -> Option<PixelFormat> {
+        let val = unsafe { ffw_codec_parameters_get_format(self.inner.ptr) };
+        match val {
+            v if v < 0 => None,
+            good_value => Some(PixelFormat::from_raw(good_value)),
+        }
     }
 
     /// Get frame width.

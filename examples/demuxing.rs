@@ -36,15 +36,21 @@ fn print_info(input: &str) -> Result<(), Error> {
         if let Some(params) = params.as_audio_codec_parameters() {
             println!("  type: audio");
             println!("  codec: {}", params.decoder_name().unwrap_or("N/A"));
-            println!("  sample format: {}", params.sample_format().name());
-            println!("  sample rate: {}", params.sample_rate());
+            println!(
+                "  sample format: {}",
+                params.sample_format().unwrap().name().unwrap_or("None")
+            );
+            println!("  sample rate: {}", params.sample_rate().unwrap());
             println!("  channels: {}", params.channel_layout().channels());
         } else if let Some(params) = params.as_video_codec_parameters() {
             println!("  type: video");
             println!("  codec: {}", params.decoder_name().unwrap_or("N/A"));
             println!("  width: {}", params.width());
             println!("  height: {}", params.height());
-            println!("  pixel format: {}", params.pixel_format().name());
+            println!(
+                "  pixel format: {}",
+                params.pixel_format().name().unwrap_or("None")
+            );
         } else {
             println!("  type: unknown");
         }

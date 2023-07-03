@@ -155,17 +155,17 @@ impl SampleFormat {
     }
 
     /// Get name of the sample format.
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> Option<&'static str> {
         unsafe {
             let ptr = ffw_get_sample_format_name(self.into_raw());
 
             if ptr.is_null() {
-                panic!("invalid sample format");
+                return None;
             }
 
             let name = CStr::from_ptr(ptr as _);
 
-            name.to_str().unwrap()
+            Some(name.to_str().unwrap())
         }
     }
 

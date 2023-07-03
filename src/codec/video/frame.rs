@@ -74,17 +74,17 @@ impl PixelFormat {
     }
 
     /// Get name of the pixel format.
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> Option<&'static str> {
         unsafe {
             let ptr = ffw_get_pixel_format_name(self.into_raw());
 
             if ptr.is_null() {
-                panic!("invalid pixel format");
+                return None;
             }
 
             let name = CStr::from_ptr(ptr as _);
 
-            name.to_str().unwrap()
+            Some(name.to_str().unwrap())
         }
     }
 }
