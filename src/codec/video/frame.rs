@@ -40,6 +40,7 @@ extern "C" {
     fn ffw_frame_get_line_count(frame: *const c_void, plane: usize) -> usize;
     fn ffw_frame_get_pkt_duration(frame: *const c_void) -> i64;
     fn ffw_frame_get_repeat_pict(frame: *const c_void) -> c_int;
+    fn ffw_frame_copy_props(dest: *mut c_void, src: *const c_void) -> c_int;
     fn ffw_frame_clone(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_free(frame: *mut c_void);
 }
@@ -423,6 +424,15 @@ impl VideoFrameMut {
         self
     }
 
+    pub fn with_props_copied_from(self, other: &VideoFrame) -> Self {
+        let ret = unsafe { ffw_frame_copy_props(self.ptr, other.ptr) };
+        if ret != 0 {
+            panic!("failed to copy props between frames");
+        }
+        
+        self
+    }
+
     /// Get picture planes.
     pub fn planes(&self) -> Planes {
         Planes::from(self)
@@ -525,6 +535,18 @@ impl VideoFrame {
     pub fn height(&self) -> usize {
         unsafe { ffw_frame_get_height(self.ptr) as _ }
     }
+
+    /*
+
+
+    /// Color information
+    color_range: Option<()>,
+    color_space: Option<()>,
+    color_transfer: Option<()>,
+    color_primaries: Option<()>,
+    chroma_location: Option<()>,
+
+     */
 
     /// Get the colorspace (aka conversion matrix, but it's not actually a matrix, just an index into a table)
     pub fn colorspace(&self) -> u32 {

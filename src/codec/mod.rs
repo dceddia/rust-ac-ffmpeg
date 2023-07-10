@@ -35,6 +35,11 @@ extern "C" {
     fn ffw_codec_parameters_get_format(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_width(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_height(params: *const c_void) -> c_int;
+    fn ffw_codec_parameters_get_color_range(params: *const c_void) -> c_int;
+    fn ffw_codec_parameters_get_color_space(params: *const c_void) -> c_int;
+    fn ffw_codec_parameters_get_color_transfer(params: *const c_void) -> c_int;
+    fn ffw_codec_parameters_get_color_primaries(params: *const c_void) -> c_int;
+    fn ffw_codec_parameters_get_chroma_location(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_sample_rate(params: *const c_void) -> c_int;
     fn ffw_codec_parameters_get_channel_layout(params: *const c_void) -> u64;
     fn ffw_codec_parameters_get_channels(params: *const c_void) -> c_int;
@@ -78,6 +83,11 @@ extern "C" {
     fn ffw_encoder_get_pixel_format(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_width(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_height(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_color_range(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_color_space(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_color_transfer(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_color_primaries(encoder: *const c_void) -> c_int;
+    fn ffw_encoder_get_chroma_location(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_max_b_frames(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_sample_format(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_sample_rate(encoder: *const c_void) -> c_int;
@@ -88,6 +98,11 @@ extern "C" {
     fn ffw_encoder_set_pixel_format(encoder: *mut c_void, format: c_int);
     fn ffw_encoder_set_width(encoder: *mut c_void, width: c_int);
     fn ffw_encoder_set_height(encoder: *mut c_void, height: c_int);
+    fn ffw_encoder_set_color_range(encoder: *mut c_void, value: c_int);
+    fn ffw_encoder_set_color_space(encoder: *mut c_void, value: c_int);
+    fn ffw_encoder_set_color_transfer(encoder: *mut c_void, value: c_int);
+    fn ffw_encoder_set_color_primaries(encoder: *mut c_void, value: c_int);
+    fn ffw_encoder_set_chroma_location(encoder: *mut c_void, value: c_int);
     fn ffw_encoder_set_max_b_frames(encoder: *mut c_void, max_b_frames: c_int);
     fn ffw_encoder_set_sample_format(encoder: *mut c_void, format: c_int);
     fn ffw_encoder_set_sample_rate(encoder: *mut c_void, sample_rate: c_int);
@@ -780,6 +795,26 @@ impl VideoCodecParameters {
     /// Get frame height.
     pub fn height(&self) -> usize {
         unsafe { ffw_codec_parameters_get_height(self.inner.ptr) as _ }
+    }
+
+    pub fn color_range(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_color_range(self.inner.ptr) as _ }
+    }
+
+    pub fn color_space(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_color_space(self.inner.ptr) as _ }
+    }
+
+    pub fn color_transfer(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_color_transfer(self.inner.ptr) as _ }
+    }
+
+    pub fn color_primaries(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_color_primaries(self.inner.ptr) as _ }
+    }
+
+    pub fn chroma_location(&self) -> u32 {
+        unsafe { ffw_codec_parameters_get_chroma_location(self.inner.ptr) as _ }
     }
 
     /// Get extradata.

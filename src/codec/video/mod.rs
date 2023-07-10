@@ -20,6 +20,13 @@ pub use self::{
 
 use super::ThreadType;
 
+// These values come from ffmpeg's codec_par.h
+pub static AVCOL_RANGE_UNSPECIFIED: u32 = 0;
+pub static AVCOL_PRI_UNSPECIFIED: u32 = 2;
+pub static AVCOL_TRC_UNSPECIFIED: u32 = 2;
+pub static AVCOL_SPC_UNSPECIFIED: u32 = 2;
+pub static AVCHROMA_LOC_UNSPECIFIED: u32 = 0;
+
 /// Builder for the video decoder.
 pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
@@ -333,6 +340,11 @@ pub struct VideoEncoderBuilder {
     width: Option<usize>,
     height: Option<usize>,
     max_b_frames: Option<usize>,
+    color_range: u32,
+    color_space: u32,
+    color_transfer: u32,
+    color_primaries: u32,
+    chroma_location: u32,
 }
 
 impl VideoEncoderBuilder {
@@ -359,6 +371,12 @@ impl VideoEncoderBuilder {
             width: None,
             height: None,
             max_b_frames: None,
+
+            color_range: AVCOL_RANGE_UNSPECIFIED,
+            color_space: AVCOL_SPC_UNSPECIFIED,
+            color_transfer: AVCOL_TRC_UNSPECIFIED,
+            color_primaries: AVCOL_PRI_UNSPECIFIED,
+            chroma_location: AVCHROMA_LOC_UNSPECIFIED,
         };
 
         Ok(res)
@@ -376,12 +394,22 @@ impl VideoEncoderBuilder {
         let width;
         let height;
         let max_b_frames;
+        let color_range;
+        let color_space;
+        let color_transfer;
+        let color_primaries;
+        let chroma_location;
 
         unsafe {
             pixel_format = PixelFormat::from_raw(super::ffw_encoder_get_pixel_format(ptr));
             width = super::ffw_encoder_get_width(ptr) as _;
             height = super::ffw_encoder_get_height(ptr) as _;
             max_b_frames = super::ffw_encoder_get_max_b_frames(ptr) as _;
+            color_range = super::ffw_encoder_get_color_range(ptr) as _;
+            color_space = super::ffw_encoder_get_color_space(ptr) as _;
+            color_transfer = super::ffw_encoder_get_color_transfer(ptr) as _;
+            color_primaries = super::ffw_encoder_get_color_primaries(ptr) as _;
+            chroma_location = super::ffw_encoder_get_chroma_location(ptr) as _;
         }
 
         let res = Self {
@@ -393,6 +421,12 @@ impl VideoEncoderBuilder {
             width: Some(width),
             height: Some(height),
             max_b_frames: Some(max_b_frames),
+
+            color_range,
+            color_space,
+            color_transfer,
+            color_primaries,
+            chroma_location,
         };
 
         Ok(res)
@@ -450,6 +484,31 @@ impl VideoEncoderBuilder {
         self
     }
 
+    pub fn color_range(mut self, value: u32) -> Self {
+        self.color_range = value;
+        self
+    }
+
+    pub fn color_space(mut self, value: u32) -> Self {
+        self.color_space = value;
+        self
+    }
+
+    pub fn color_transfer(mut self, value: u32) -> Self {
+        self.color_transfer = value;
+        self
+    }
+
+    pub fn color_primaries(mut self, value: u32) -> Self {
+        self.color_primaries = value;
+        self
+    }
+
+    pub fn chroma_location(mut self, value: u32) -> Self {
+        self.chroma_location = value;
+        self
+    }
+
     /// Set maximum number of B frames (defaults to 0).
     pub fn max_b_frames(mut self, max: usize) -> Self {
         self.max_b_frames = Some(max);
@@ -474,6 +533,11 @@ impl VideoEncoderBuilder {
             super::ffw_encoder_set_width(self.ptr, width as _);
             super::ffw_encoder_set_height(self.ptr, height as _);
             super::ffw_encoder_set_max_b_frames(self.ptr, max_b_frames as _);
+            super::ffw_encoder_set_color_range(self.ptr, self.color_range as _);
+            super::ffw_encoder_set_color_space(self.ptr, self.color_space as _);
+            super::ffw_encoder_set_color_transfer(self.ptr, self.color_transfer as _);
+            super::ffw_encoder_set_color_primaries(self.ptr, self.color_primaries as _);
+            super::ffw_encoder_set_chroma_location(self.ptr, self.chroma_location as _);
 
             if super::ffw_encoder_open(self.ptr) != 0 {
                 return Err(Error::new("unable to build the encoder"));

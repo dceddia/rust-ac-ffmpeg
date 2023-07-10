@@ -190,6 +190,10 @@ void ffw_frame_set_pts(AVFrame* frame, int64_t pts) {
     frame->pts = pts;
 }
 
+int ffw_frame_copy_props(AVFrame* dest, const AVFrame* src) {
+    return av_frame_copy_props(dest, src);
+}
+
 AVFrame* ffw_frame_clone(const AVFrame* frame) {
     return av_frame_clone(frame);
 }

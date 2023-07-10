@@ -158,6 +158,26 @@ impl DemuxerBuilder {
         self
     }
 
+    fn guess_frame_rate(&self, stream_index: usize) -> Result<TimeBase, Error> {
+        let mut num: u32 = 0;
+        let mut den: u32 = 0;
+
+        let res = unsafe {
+            ffw_demuxer_guess_frame_rate(
+                self.ptr,
+                stream_index as u32,
+                &mut num as *mut u32,
+                &mut den as *mut u32,
+            )
+        };
+
+        if res != 0 {
+            Err(Error::new("could not get frame rate, invalid stream index"))
+        } else {
+            Ok(TimeBase::new(num, den))
+        }
+    }
+
     /// Build the demuxer.
     ///
     /// # Arguments
@@ -180,11 +200,30 @@ impl DemuxerBuilder {
             return Err(Error::from_raw_error_code(ret));
         }
 
+        let stream_count = unsafe { ffw_demuxer_get_nb_streams(self.ptr) };
+
+        let mut streams = Vec::with_capacity(stream_count as usize);
+
+        for i in 0..stream_count {
+            let mut stream = unsafe {
+                let ptr = ffw_demuxer_get_stream(self.ptr, i as _);
+
+                if ptr.is_null() {
+                    return Err(Error::new(format!("unable to get info for stream {}", i)));
+                }
+
+                Stream::from_raw_ptr(ptr)
+            };
+
+            stream.set_frame_rate_guess(self.guess_frame_rate(i as usize).ok());
+            streams.push(stream);
+        }
+
         let ptr = self.ptr;
 
         self.ptr = ptr::null_mut();
 
-        let res = Demuxer { ptr, io };
+        let res = Demuxer { ptr, io, streams };
 
         Ok(res)
     }
@@ -203,6 +242,7 @@ unsafe impl Sync for DemuxerBuilder {}
 pub struct Demuxer<T> {
     ptr: *mut c_void,
     io: IO<T>,
+    streams: Vec<Stream>,
 }
 
 impl Demuxer<()> {
@@ -298,6 +338,60 @@ impl<T> Demuxer<T> {
         }
     }
 
+    /// Get streams.
+    ///
+    /// These are potentially missing some information because stream info hasn't been loaded yet,
+    /// so if you need something that's missing, or you want to be absolutely sure the values are as correct
+    /// as they can be, call find_stream_info.
+    pub fn streams(&self) -> &[Stream] {
+        &self.streams
+    }
+
+    /// Set the discard flags on the streams such that packets
+    /// will only come from the desired stream.
+    pub fn read_single_stream(&mut self, stream_index: usize) {
+        for stream in &mut self.streams {
+            if stream.index() == stream_index {
+                stream.set_discard(Discard::Default);
+            } else {
+                stream.set_discard(Discard::All);
+            }
+        }
+    }
+
+    /// Set the discard flags on the streams such that packets
+    /// will only come from the desired streams.
+    pub fn enable_streams(&mut self, enabled_streams: &[usize]) {
+        for stream in &mut self.streams {
+            if enabled_streams.contains(&stream.index()) {
+                stream.set_discard(Discard::Default);
+            } else {
+                stream.set_discard(Discard::All);
+            }
+        }
+    }
+
+    /// Reset the discard flags so that packets come from every stream.
+    pub fn read_all_streams(&mut self) {
+        for stream in &mut self.streams {
+            stream.set_discard(Discard::Default);
+        }
+    }
+
+    /// Get global metadata.
+    pub fn get_metadata(&self, key: &str) -> Option<&'static str> {
+        let key = CString::new(key).expect("invalid metadata key");
+
+        let value = unsafe { ffw_demuxer_get_metadata(self.ptr, key.as_ptr()) };
+
+        if value.is_null() {
+            None
+        } else {
+            let value = unsafe { CStr::from_ptr(value as _) };
+            Some(value.to_str().unwrap())
+        }
+    }
+
     /// Try to find stream info. Optionally, you can pass `max_analyze_duration` which tells FFmpeg
     /// how far it should look for stream info.
     pub fn find_stream_info(
@@ -316,6 +410,40 @@ impl<T> Demuxer<T> {
             return Err((self, Error::from_raw_error_code(ret)));
         }
 
+        let stream_count = unsafe { ffw_demuxer_get_nb_streams(self.ptr) };
+
+        let mut streams = Vec::with_capacity(stream_count as usize);
+
+        for i in 0..stream_count {
+            let mut stream = unsafe {
+                let ptr = ffw_demuxer_get_stream(self.ptr, i as _);
+
+                if ptr.is_null() {
+                    return Err((
+                        self,
+                        Error::new(format!("unable to get info for stream {}", i)),
+                    ));
+                }
+
+                Stream::from_raw_ptr(ptr)
+            };
+
+            stream.set_frame_rate_guess(self.guess_frame_rate(i as usize).ok());
+            streams.push(stream);
+        }
+
+        let res = DemuxerWithStreamInfo {
+            inner: self,
+            streams,
+        };
+
+        Ok(res)
+    }
+
+    /// Fill out the streams with whatever info was found in the header, without decoding anything.
+    /// This could give misleading or missing values for some stuff. Use find_stream_info to do a
+    /// thorough search.
+    pub fn with_basic_stream_info(self) -> Result<DemuxerWithStreamInfo<T>, (Self, Error)> {
         let stream_count = unsafe { ffw_demuxer_get_nb_streams(self.ptr) };
 
         let mut streams = Vec::with_capacity(stream_count as usize);

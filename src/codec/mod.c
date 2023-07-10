@@ -117,6 +117,26 @@ int ffw_codec_parameters_get_height(const AVCodecParameters* params) {
     return params->height;
 }
 
+int ffw_codec_parameters_get_color_range(const AVCodecParameters* params) {
+    return params->color_range;
+}
+
+int ffw_codec_parameters_get_color_space(const AVCodecParameters* params) {
+    return params->color_space;
+}
+
+int ffw_codec_parameters_get_color_transfer(const AVCodecParameters* params) {
+    return params->color_trc;
+}
+
+int ffw_codec_parameters_get_color_primaries(const AVCodecParameters* params) {
+    return params->color_primaries;
+}
+
+int ffw_codec_parameters_get_chroma_location(const AVCodecParameters* params) {
+    return params->chroma_location;
+}
+
 int ffw_codec_parameters_get_sample_rate(const AVCodecParameters* params) {
     return params->sample_rate;
 }
@@ -484,6 +504,11 @@ Encoder* ffw_encoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_encoder_get_pixel_format(const Encoder* encoder);
 int ffw_encoder_get_width(const Encoder* encoder);
 int ffw_encoder_get_height(const Encoder* encoder);
+int ffw_encoder_get_color_range(const Encoder* encoder);
+int ffw_encoder_get_color_space(const Encoder* encoder);
+int ffw_encoder_get_color_transfer(const Encoder* encoder);
+int ffw_encoder_get_color_primaries(const Encoder* encoder);
+int ffw_encoder_get_chroma_location(const Encoder* encoder);
 int ffw_encoder_get_max_b_frames(const Encoder* encoder);
 int ffw_encoder_get_sample_format(const Encoder* encoder);
 int ffw_encoder_get_sample_rate(const Encoder* encoder);
@@ -493,6 +518,11 @@ void ffw_encoder_set_bit_rate(Encoder* encoder, int64_t bit_rate);
 void ffw_encoder_set_pixel_format(Encoder* encoder, int format);
 void ffw_encoder_set_width(Encoder* encoder, int width);
 void ffw_encoder_set_height(Encoder* encoder, int height);
+void ffw_encoder_set_color_range(Encoder* encoder, int value);
+void ffw_encoder_set_color_space(Encoder* encoder, int value);
+void ffw_encoder_set_color_transfer(Encoder* encoder, int value);
+void ffw_encoder_set_color_primaries(Encoder* encoder, int value);
+void ffw_encoder_set_chroma_location(Encoder* encoder, int value);
 void ffw_encoder_set_max_b_frames(Encoder* encoder, int max_b_frames);
 void ffw_encoder_set_sample_format(Encoder* encoder, int format);
 void ffw_encoder_set_sample_rate(Encoder* encoder, int sample_rate);
@@ -609,10 +639,29 @@ int ffw_encoder_get_height(const Encoder* encoder) {
     return encoder->cc->height;
 }
 
+int ffw_encoder_get_color_range(const Encoder* encoder) {
+    return encoder->cc->color_range;
+}
+
+int ffw_encoder_get_color_space(const Encoder* encoder) {
+    return encoder->cc->colorspace;
+}
+
+int ffw_encoder_get_color_transfer(const Encoder* encoder) {
+    return encoder->cc->color_trc;
+}
+
+int ffw_encoder_get_color_primaries(const Encoder* encoder) {
+    return encoder->cc->color_primaries;
+}
+
+int ffw_encoder_get_chroma_location(const Encoder* encoder) {
+    return encoder->cc->chroma_sample_location;
+}
+
 int ffw_encoder_get_max_b_frames(const Encoder* encoder) {
     return encoder->cc->max_b_frames;
 }
-
 
 int ffw_encoder_get_sample_format(const Encoder* encoder) {
     return encoder->cc->sample_fmt;
@@ -653,6 +702,46 @@ void ffw_encoder_set_height(Encoder* encoder, int height) {
 
 void ffw_encoder_set_max_b_frames(Encoder* encoder, int max_b_frames) {
     encoder->cc->max_b_frames = max_b_frames;
+}
+
+// void ffw_encoder_set_hardcoded_color_values_for_one_time_test(Encoder* encoder) {
+//     // DELETE THIS FUNCTION AFTER TRYING THIS OUT
+//     // We're just hardcoding some HDR values to see if this helps at all...
+//     /*
+//     These are from the test file:
+    
+//     color_range=tv
+//     color_space=bt2020nc
+//     color_transfer=arib-std-b67
+//     color_primaries=bt2020
+//     chroma_location=left
+//     */
+//    printf("WE ARE SETTING THE ffw_encoder_set_hardcoded_color_values_for_one_time_test\n");
+//     encoder->cc->color_range=AVCOL_RANGE_MPEG;
+//     encoder->cc->colorspace=AVCOL_SPC_BT2020_NCL;
+//     encoder->cc->color_trc=AVCOL_TRC_ARIB_STD_B67;
+//     encoder->cc->color_primaries=AVCOL_PRI_BT2020;
+//     encoder->cc->chroma_sample_location=AVCHROMA_LOC_LEFT;
+// }
+
+void ffw_encoder_set_color_range(Encoder* encoder, int value) {
+    encoder->cc->color_range = value;
+}
+
+void ffw_encoder_set_color_space(Encoder* encoder, int value) {
+    encoder->cc->colorspace = value;
+}
+
+void ffw_encoder_set_color_transfer(Encoder* encoder, int value) {
+    encoder->cc->color_trc = value;
+}
+
+void ffw_encoder_set_color_primaries(Encoder* encoder, int value) {
+    encoder->cc->color_primaries = value;
+}
+
+void ffw_encoder_set_chroma_location(Encoder* encoder, int value) {
+    encoder->cc->chroma_sample_location = value;
 }
 
 void ffw_encoder_set_sample_format(Encoder* encoder, int format) {
