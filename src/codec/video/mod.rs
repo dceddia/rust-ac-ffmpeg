@@ -22,6 +22,8 @@ use super::ThreadType;
 
 // These values come from ffmpeg's codec_par.h
 pub static AVCOL_RANGE_UNSPECIFIED: u32 = 0;
+pub static AVCOL_RANGE_MPEG: u32 = 1;
+pub static AVCOL_RANGE_JPEG: u32 = 2;
 pub static AVCOL_PRI_UNSPECIFIED: u32 = 2;
 pub static AVCOL_TRC_UNSPECIFIED: u32 = 2;
 pub static AVCOL_SPC_UNSPECIFIED: u32 = 2;
