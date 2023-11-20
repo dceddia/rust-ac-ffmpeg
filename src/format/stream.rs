@@ -103,6 +103,16 @@ impl Stream {
         TimeBase::new(num, den)
     }
 
+    /// Return the frames per second. If it is 0, None is returned.
+    pub fn frames_per_second(&self) -> Option<f64> {
+        let value = self.r_frame_rate().decimal();
+        if value > 0.0 {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     /// Get the stream's rotation, in degrees. (will be 0 for non-video streams)
     pub fn rotation(&self) -> f64 {
         unsafe { ffw_stream_get_rotation(self.ptr) }
