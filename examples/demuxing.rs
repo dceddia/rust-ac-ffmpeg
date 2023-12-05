@@ -49,7 +49,7 @@ fn print_info(input: &str) -> Result<(), Error> {
             println!("  height: {}", params.height());
             println!(
                 "  pixel format: {}",
-                params.pixel_format().name().unwrap_or("None")
+                params.pixel_format().unwrap().name().unwrap_or("None")
             );
         } else {
             println!("  type: unknown");
