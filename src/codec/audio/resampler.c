@@ -149,6 +149,19 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
     }
 
     if (frame) {
+        /*
+            I'm not sure why the `else` case uses delay + 3 and this case does not
+            take delay into account. It seemed like the libav code did actually add
+            the delay + 3, but also this seems to be working fine as-is. I'm leaving
+            a note here with the modified code in case problems are found - maybe this
+            will be a useful breadcrumb.
+
+            required_capacity = swr_get_out_samples(
+            resampler->resample_context,
+            frame->nb_samples) + swr_get_delay(
+                resampler->resample_context,
+                resampler->target_sample_rate) + 3;
+        */
         required_capacity = swr_get_out_samples(
             resampler->resample_context,
             frame->nb_samples);
