@@ -229,6 +229,7 @@ AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder);
 void ffw_decoder_free(Decoder* decoder);
 
 int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
+    /*
     const AVCodecHWConfig *config = NULL;
     enum AVHWDeviceType type;
     enum AVPixelFormat hw_pix_fmt;
@@ -265,7 +266,8 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     return 0;
 
     fail:
-        fprintf(stderr, "Failed to initialize hardware acceleration\n");
+    */
+        fprintf(stderr, "Failed to initialize hardware acceleration (not implemented)\n");
         decoder->use_hwaccel = 0;
         return -1;
 }
