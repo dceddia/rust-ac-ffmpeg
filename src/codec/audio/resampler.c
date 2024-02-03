@@ -7,7 +7,8 @@ typedef struct AudioResampler {
     struct AVFrame* tmp_frame;
     struct AVFrame* output_frame;
 
-    uint64_t target_channel_layout;
+    AVChannelLayout target_channel_layout;
+
     int target_channels;
     int target_sample_format;
     int target_sample_rate;
@@ -28,40 +29,43 @@ typedef struct AudioResampler {
 } AudioResampler;
 
 static AVFrame* alloc_frame(
-    uint64_t channel_layout,
+    const AVChannelLayout* channel_layout,
     int sample_fmt,
     int sample_rate,
     int nb_samples)
 {
-    AVFrame* frame;
-    int channels;
+    AVFrame* frame = av_frame_alloc();
 
-    frame = av_frame_alloc();
     if (!frame) {
         return NULL;
     }
 
-    channels = av_get_channel_layout_nb_channels(channel_layout);
-
-    frame->channel_layout = channel_layout;
-    frame->channels = channels;
     frame->format = sample_fmt;
     frame->sample_rate = sample_rate;
     frame->nb_samples = nb_samples;
 
+    if (av_channel_layout_copy(&frame->ch_layout, channel_layout) != 0) {
+        goto err;
+    }
+
     if (av_frame_get_buffer(frame, 0) != 0) {
-        av_frame_free(&frame);
+        goto err;
     }
 
     return frame;
+
+err:
+    av_frame_free(&frame);
+
+    return NULL;
 }
 
 AudioResampler* ffw_audio_resampler_new(
-    uint64_t target_channel_layout,
+    const AVChannelLayout* target_channel_layout,
     int target_sample_format,
     int target_sample_rate,
     int target_frame_samples,
-    uint64_t source_channel_layout,
+    const AVChannelLayout* source_channel_layout,
     int source_sample_format,
     int source_sample_rate,
     int enable_compensation);
@@ -69,25 +73,26 @@ AudioResampler* ffw_audio_resampler_new(
 void ffw_audio_resampler_free(AudioResampler* resampler);
 
 AudioResampler* ffw_audio_resampler_new(
-    uint64_t target_channel_layout,
+    const AVChannelLayout* target_channel_layout,
     int target_sample_format,
     int target_sample_rate,
     int target_frame_samples,
-    uint64_t source_channel_layout,
+    const AVChannelLayout* source_channel_layout,
     int source_sample_format,
     int source_sample_rate,
     int enable_compensation) {
-    AudioResampler* res = malloc(sizeof(AudioResampler));
-    if (!res) {
+    AudioResampler* res;
+    int ret;
+
+    if (!(res = calloc(1, sizeof(AudioResampler)))) {
         return NULL;
     }
 
-    res->resample_context = NULL;
-    res->tmp_frame = NULL;
-    res->output_frame = NULL;
+    if (av_channel_layout_copy(&res->target_channel_layout, target_channel_layout) != 0) {
+        goto err;
+    }
 
-    res->target_channel_layout = target_channel_layout;
-    res->target_channels = av_get_channel_layout_nb_channels(target_channel_layout);
+    res->target_channels = target_channel_layout->nb_channels;
     res->target_sample_format = target_sample_format;
     res->target_sample_rate = target_sample_rate;
     res->target_frame_samples = target_frame_samples;
@@ -101,21 +106,18 @@ AudioResampler* ffw_audio_resampler_new(
     res->input_pts_offset = 0;
     res->output_pts_offset = 0;
 
-    res->offset = 0;
-    res->flush = 0;
-
-    res->resample_context = swr_alloc_set_opts(
-        NULL,
-        target_channel_layout,
+    ret = swr_alloc_set_opts2(
+        &res->resample_context,
+        (AVChannelLayout*)target_channel_layout,
         target_sample_format,
         target_sample_rate,
-        source_channel_layout,
+        (AVChannelLayout*)source_channel_layout,
         source_sample_format,
         source_sample_rate,
         0,
         NULL);
 
-    if (!res->resample_context) {
+    if (ret != 0 || !res->resample_context) {
         goto err;
     }
 
@@ -183,7 +185,7 @@ int ffw_audio_resampler_push_frame(AudioResampler* resampler, const AVFrame* fra
         av_frame_free(&resampler->tmp_frame);
 
         resampler->tmp_frame = alloc_frame(
-            resampler->target_channel_layout,
+            &resampler->target_channel_layout,
             resampler->target_sample_format,
             resampler->target_sample_rate,
             required_capacity);
@@ -250,7 +252,7 @@ int ffw_audio_resampler_take_frame(AudioResampler* resampler, AVFrame** frame) {
         av_frame_free(&resampler->output_frame);
 
         resampler->output_frame = alloc_frame(
-            resampler->target_channel_layout,
+            &resampler->target_channel_layout,
             resampler->target_sample_format,
             resampler->target_sample_rate,
             resampler->target_frame_samples);
@@ -319,6 +321,8 @@ void ffw_audio_resampler_free(AudioResampler* resampler) {
     av_frame_free(&resampler->tmp_frame);
     av_frame_free(&resampler->output_frame);
     swr_free(&resampler->resample_context);
+
+    av_channel_layout_uninit(&resampler->target_channel_layout);
 
     free(resampler);
 }
