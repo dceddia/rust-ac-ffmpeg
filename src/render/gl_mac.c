@@ -1,3 +1,7 @@
+// shhhhhh
+#define COREVIDEO_SILENCE_GL_DEPRECATION
+#define GL_SILENCE_DEPRECATION
+
 #include <assert.h>
 #include <IOSurface/IOSurface.h>
 #include <CoreVideo/CoreVideo.h>
@@ -113,7 +117,6 @@ RenderContext *gl_renderer_new()
 
   // Create a texture cache. This will be used later to efficiently create textures out of CVPixelBuffers
   // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-  printf("glContext pixelformat = 0x%x\n", pixelFormat);
   gst_gl_context_cocoa_dump_pixel_format(pixelFormat);
   CVOpenGLTextureCacheCreate(kCFAllocatorDefault, NULL, glContext, pixelFormat, NULL, &ctx->textureCache);
 
@@ -129,8 +132,6 @@ RenderContext *gl_renderer_new()
 // Pass a frame to render, and an array of textures to render to (1 per plane)
 int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer, GLint sampler_y_location, GLint sampler_uv_location)
 {
-  GLuint internal_formats[2] = {GL_R8, GL_RG8};
-  GLenum formats[2] = {GL_RED, GL_RG};
 
   // Get the underlying IOSurface
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixelBuffer);
@@ -139,7 +140,6 @@ int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer, GLint s
     return -1;
   }
 
-  bool is_planar = CVPixelBufferIsPlanar(pixelBuffer);
   int num_planes = CVPixelBufferGetPlaneCount(pixelBuffer);
   if (num_planes != 2)
   {
@@ -208,7 +208,7 @@ int gl_renderer_render(RenderContext *ctx, CVPixelBufferRef pixelBuffer, GLint s
   return 0;
 }
 
-const char printPixelFormatType(CVPixelBufferRef pixelBuffer)
+void printPixelFormatType(CVPixelBufferRef pixelBuffer)
 {
   FourCharCode type = CVPixelBufferGetPixelFormatType(pixelBuffer);
   // byteswapped, print in reverse
