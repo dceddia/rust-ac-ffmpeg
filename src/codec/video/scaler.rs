@@ -217,7 +217,7 @@ impl VideoFrameScaler {
         let res = unsafe { ffw_frame_scaler_scale(self.ptr, frame.as_ptr()) };
 
         if res.is_null() {
-            panic!("unable to scale a frame");
+            return Err(Error::new("unable to scale a frame - out of memory?"));
         }
 
         let frame = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) };
