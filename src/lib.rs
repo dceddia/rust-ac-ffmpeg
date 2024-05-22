@@ -35,6 +35,27 @@ extern "C" {
     fn ffw_error_get_error_string(error: c_int, buffer: *mut c_char, buffer_size: usize);
 }
 
+pub enum LogLevel {
+    /// Print no output.
+    Quiet = -8,
+    /// Something went really wrong and we will crash now.
+    Panic = 0,
+    /// Something went wrong and recovery is not possible.
+    Fatal = 8,
+    /// Something went wrong and cannot losslessly be recovered.
+    Error = 16,
+    /// Something somehow does not look correct.
+    Warning = 24,
+    /// Standard information.
+    Info = 32,
+    /// Detailed information.
+    Verbose = 40,
+    /// Stuff which is only useful for libav* developers.
+    Debug = 48,
+    /// Extremely verbose debugging, useful for libav* development.
+    Trace = 56,
+}
+
 /// A C function passed to the native library as a log callback. The function
 /// calls a closure saved in LOG_CALLBACK (if any).
 extern "C" fn log_callback(level: c_int, message: *const c_char) {
@@ -42,12 +63,10 @@ extern "C" fn log_callback(level: c_int, message: *const c_char) {
 
     // level 40 is VERBOSE
     // level 32 and lower is INFO, WARNING or higher in terms of FFmpeg
-    if level <= 40 {
-        LOG_CALLBACK
-            .read()
-            .unwrap()
-            .call(level as _, &msg.to_string_lossy());
-    }
+    LOG_CALLBACK
+        .read()
+        .unwrap()
+        .call(level as _, &msg.to_string_lossy());
 }
 
 /// Wrapper around a log closure.
