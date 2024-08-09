@@ -17,6 +17,7 @@ extern "C" {
     fn ffw_channel_layout_from_string(layout: *mut *mut c_void, s: *const c_char) -> c_int;
     fn ffw_channel_layout_clone(dst: *mut *mut c_void, src: *const c_void) -> c_int;
     fn ffw_channel_layout_is_valid(layout: *const c_void) -> c_int;
+    fn ffw_channel_layout_is_order_unspec(layout: *const c_void) -> c_int;
     fn ffw_channel_layout_get_channels(layout: *const c_void) -> u32;
     fn ffw_channel_layout_compare(a: *const c_void, b: *const c_void) -> c_int;
     fn ffw_channel_layout_free(layout: *mut c_void);
@@ -39,6 +40,11 @@ impl ChannelLayoutRef {
     /// Get number of channels.
     pub fn channels(&self) -> u32 {
         unsafe { ffw_channel_layout_get_channels(self.as_ptr()) }
+    }
+
+    /// Check if the order is unspecified/native/etc.
+    pub fn is_order_unspecified(&self) -> bool {
+        unsafe { ffw_channel_layout_is_order_unspec(self.as_ptr()) != 0 }
     }
 
     /// Check if the channel layout is valid.

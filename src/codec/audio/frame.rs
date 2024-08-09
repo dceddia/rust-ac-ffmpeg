@@ -455,6 +455,7 @@ impl AudioFrame {
         // attempt to fix it.
         if !frame.channel_layout().is_valid()
             || frame.channel_layout().channels() != frame.channels()
+            || frame.channel_layout().is_order_unspecified()
         {
             // If it fails, just use the channel layout from the frame.
             frame.set_channel_layout(

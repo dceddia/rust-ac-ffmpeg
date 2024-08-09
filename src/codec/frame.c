@@ -72,6 +72,10 @@ uint32_t ffw_channel_layout_get_channels(const AVChannelLayout* layout) {
     return layout->nb_channels;
 }
 
+int ffw_channel_layout_is_order_unspec(const AVChannelLayout* layout) {
+    return layout->order == AV_CHANNEL_ORDER_UNSPEC;
+}
+
 int ffw_channel_layout_compare(const AVChannelLayout* a, const AVChannelLayout* b) {
     return av_channel_layout_compare(a, b);
 }
