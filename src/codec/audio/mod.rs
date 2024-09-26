@@ -4,7 +4,11 @@ pub mod channels;
 pub mod frame;
 pub mod resampler;
 
-use std::{ffi::CString, os::raw::c_void, ptr};
+use std::{
+    ffi::{CStr, CString},
+    os::raw::c_void,
+    ptr,
+};
 
 use crate::{
     codec::{AudioCodecParameters, CodecError, CodecParameters, Decoder, Encoder},
@@ -564,6 +568,20 @@ impl Encoder for AudioEncoder {
                 }
                 0 => Ok(None),
                 e => Err(Error::from_raw_error_code(e)),
+            }
+        }
+    }
+
+    fn codec_name(&self) -> Option<&'static str> {
+        unsafe {
+            let ptr = super::ffw_encoder_get_name(self.raw.ptr);
+
+            if ptr.is_null() {
+                None
+            } else {
+                let name = CStr::from_ptr(ptr as _);
+
+                Some(name.to_str().unwrap())
             }
         }
     }

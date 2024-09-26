@@ -499,6 +499,7 @@ typedef struct Encoder {
 Encoder* ffw_encoder_new(const char* codec);
 Encoder* ffw_encoder_from_codec_parameters(const AVCodecParameters* params);
 int ffw_encoder_get_pixel_format(const Encoder* encoder);
+const char* ffw_encoder_get_name(const Encoder* encoder);
 int ffw_encoder_get_width(const Encoder* encoder);
 int ffw_encoder_get_height(const Encoder* encoder);
 int ffw_encoder_get_color_range(const Encoder* encoder);
@@ -627,6 +628,10 @@ err:
 
 int ffw_encoder_get_pixel_format(const Encoder* encoder) {
     return encoder->cc->pix_fmt;
+}
+
+const char* ffw_encoder_get_name(const Encoder* encoder) {
+    return encoder->codec->name;
 }
 
 int ffw_encoder_get_width(const Encoder* encoder) {

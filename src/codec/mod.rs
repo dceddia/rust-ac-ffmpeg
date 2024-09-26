@@ -80,6 +80,7 @@ extern "C" {
     fn ffw_encoder_new(codec: *const c_char) -> *mut c_void;
     fn ffw_encoder_from_codec_parameters(params: *const c_void) -> *mut c_void;
     fn ffw_encoder_get_codec_parameters(encoder: *const c_void) -> *mut c_void;
+    fn ffw_encoder_get_name(encoder: *const c_void) -> *const c_char;
     fn ffw_encoder_get_pixel_format(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_width(encoder: *const c_void) -> c_int;
     fn ffw_encoder_get_height(encoder: *const c_void) -> c_int;
@@ -983,6 +984,9 @@ pub trait Encoder {
 
     /// Get codec parameters.
     fn codec_parameters(&self) -> Self::CodecParameters;
+
+    /// Get the name of the codec
+    fn codec_name(&self) -> Option<&'static str>;
 
     /// Push a given frame to the encoder.
     ///
