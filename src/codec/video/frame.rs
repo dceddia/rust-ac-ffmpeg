@@ -16,6 +16,8 @@ use crate::{
     time::{TimeBase, Timestamp},
 };
 
+use super::pixel::AVPixelFormat;
+
 extern "C" {
     fn ffw_get_pixel_format_by_name(name: *const c_char) -> c_int;
     fn ffw_pixel_format_is_none(format: c_int) -> c_int;
@@ -33,6 +35,9 @@ extern "C" {
     fn ffw_frame_get_color_primaries(frame: *const c_void) -> c_int;
     fn ffw_frame_get_color_transfer_characteristic(frame: *const c_void) -> c_int;
     fn ffw_frame_get_colorspace(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_color_range(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_chroma_location(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_num_planes(frame: *const c_void) -> c_int;
     fn ffw_frame_get_pts(frame: *const c_void) -> i64;
     fn ffw_frame_set_pts(frame: *mut c_void, pts: i64);
     fn ffw_frame_get_plane_data(frame: *mut c_void, index: usize) -> *mut u8;
@@ -526,6 +531,10 @@ impl VideoFrame {
         unsafe { PixelFormat::from_raw(ffw_frame_get_format(self.ptr)) }
     }
 
+    pub fn av_pixel_format(&self) -> AVPixelFormat {
+        unsafe { std::mem::transmute(ffw_frame_get_format(self.ptr)) }
+    }
+
     /// Get frame width.
     pub fn width(&self) -> usize {
         unsafe { ffw_frame_get_width(self.ptr) as _ }
@@ -561,6 +570,18 @@ impl VideoFrame {
     /// Get the color primaries
     pub fn color_primaries(&self) -> u32 {
         unsafe { ffw_frame_get_color_primaries(self.ptr) as _ }
+    }
+
+    pub fn color_range(&self) -> u32 {
+        unsafe { ffw_frame_get_color_range(self.ptr) as _ }
+    }
+
+    pub fn chroma_location(&self) -> u32 {
+        unsafe { ffw_frame_get_chroma_location(self.ptr) as _ }
+    }
+
+    pub fn num_planes(&self) -> usize {
+        unsafe { ffw_frame_get_num_planes(self.ptr) as _ }
     }
 
     /// Get picture planes.
