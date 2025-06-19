@@ -589,6 +589,29 @@ impl VideoFrame {
         Planes::from(self)
     }
 
+    /// Get plane data.
+    pub fn data(&self, index: usize) -> &[u8] {
+        let line_size = self.line_size(index);
+        let line_count = self.line_count(index);
+
+        unsafe {
+            let data = ffw_frame_get_plane_data(self.ptr, index as _);
+
+            slice::from_raw_parts(data, line_size * line_count)
+        }
+    }
+
+    /// Get line size (note: the line size doesn't necessarily need to be equal to picture width).
+    pub fn line_size(&self, index: usize) -> usize {
+        unsafe { ffw_frame_get_line_size(self.ptr, index as _) as _ }
+    }
+
+    /// Get number of lines (note: the number of lines doesn't necessarily need to be equal to
+    /// to picture height).
+    pub fn line_count(&self, index: usize) -> usize {
+        unsafe { ffw_frame_get_line_count(self.ptr, index as _) as _ }
+    }
+
     /// Get frame time base.
     pub fn time_base(&self) -> TimeBase {
         self.time_base
