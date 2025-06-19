@@ -5,6 +5,7 @@
 #include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
+#include <libavutil/hwcontext.h>
 
 int ffw_channel_layout_get_default(AVChannelLayout* *layout, uint32_t channels) {
     AVChannelLayout* res;
@@ -207,6 +208,22 @@ err:
     return NULL;
 }
 
+AVFrame* ffw_frame_from_hardware(AVFrame* frame) {
+    AVFrame* sw_frame;
+    sw_frame = av_frame_alloc();
+
+    if (sw_frame == NULL) {
+        return NULL;
+    }
+
+    if (av_hwframe_transfer_data(sw_frame, frame, 0) < 0) {
+        av_frame_free(&sw_frame);
+        return NULL;
+    }
+
+    return sw_frame;
+}
+
 int ffw_frame_get_format(const AVFrame* frame) {
     return frame->format;
 }
@@ -305,4 +322,8 @@ uint8_t* ffw_frame_get_plane_data(AVFrame* frame, size_t index) {
 
 int ffw_frame_get_repeat_pict(AVFrame *frame) {
     return frame->repeat_pict;
+}
+
+void* ffw_frame_get_hw_frames_ctx(AVFrame *frame) {
+    return frame->hw_frames_ctx;
 }

@@ -29,6 +29,7 @@ extern "C" {
         height: c_int,
         alignment: c_int,
     ) -> *mut c_void;
+    fn ffw_frame_from_hardware(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_get_format(frame: *const c_void) -> c_int;
     fn ffw_frame_get_width(frame: *const c_void) -> c_int;
     fn ffw_frame_get_height(frame: *const c_void) -> c_int;
@@ -45,6 +46,7 @@ extern "C" {
     fn ffw_frame_get_line_count(frame: *const c_void, plane: usize) -> usize;
     fn ffw_frame_get_pkt_duration(frame: *const c_void) -> i64;
     fn ffw_frame_get_repeat_pict(frame: *const c_void) -> c_int;
+    fn ffw_frame_get_hw_frames_ctx(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_copy_props(dest: *mut c_void, src: *const c_void) -> c_int;
     fn ffw_frame_clone(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_free(frame: *mut c_void);
@@ -610,6 +612,42 @@ impl VideoFrame {
     /// to picture height).
     pub fn line_count(&self, index: usize) -> usize {
         unsafe { ffw_frame_get_line_count(self.ptr, index as _) as _ }
+    }
+
+    /// Check if this frame is hardware-backed
+    pub fn is_hw_frame(&self) -> bool {
+        unsafe { !ffw_frame_get_hw_frames_ctx(self.ptr).is_null() }
+    }
+
+    /// Copy this hardware-backed frame to system memory.
+    ///
+    /// It can fail if there's not enough memory, and in the case of failure,
+    /// the original frame is left unchanged.
+    pub fn copy_to_software(&mut self) {
+        unsafe {
+            let sw_frame = ffw_frame_from_hardware(self.ptr);
+            if sw_frame.is_null() {
+                panic!("unable to allocate memory for software frame");
+            }
+
+            let old_frame = std::mem::replace(&mut self.ptr, sw_frame);
+            ffw_frame_free(old_frame);
+        }
+    }
+
+    /// Get the fourth data pointer, which holds a CVPixelBufferRef on macOS
+    /// Returns None if this frame is not a hardware frame
+    pub fn cv_pixel_buffer(&self) -> Option<*mut u8> {
+        if !self.is_hw_frame() {
+            return None;
+        }
+
+        let data = unsafe { ffw_frame_get_plane_data(self.ptr, 3) };
+        if data.is_null() {
+            None
+        } else {
+            Some(data)
+        }
     }
 
     /// Get frame time base.
