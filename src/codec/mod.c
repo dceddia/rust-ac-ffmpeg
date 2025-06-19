@@ -234,7 +234,7 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     int i;
 
     // Find a hardware decoder that will work for the codec
-    for (i = 0;; i++) {
+    for (i = 0; i < 50; i++) {
         config = avcodec_get_hw_config(decoder->decoder, i);
         if (!config)
             break;
