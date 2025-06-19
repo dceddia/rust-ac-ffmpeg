@@ -231,6 +231,18 @@ int ffw_frame_get_color_primaries(const AVFrame* frame) {
     return frame->color_primaries;
 }
 
+int ffw_frame_get_color_range(const AVFrame* frame) {
+    return frame->color_range;
+}
+
+int ffw_frame_get_chroma_location(const AVFrame* frame) {
+    return frame->chroma_location;
+}
+
+int ffw_frame_get_num_planes(const AVFrame* frame) {
+    return av_pix_fmt_count_planes(frame->format);
+}
+
 int ffw_frame_get_sample_rate(const AVFrame* frame) {
     return frame->sample_rate;
 }
