@@ -225,6 +225,7 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder);
 int ffw_decoder_push_packet(Decoder* decoder, const AVPacket* packet);
 void ffw_decoder_flush_buffers(Decoder* decoder);
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame);
+void ffw_decoder_set_discard(Decoder* decoder, int discard);
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder);
 void ffw_decoder_free(Decoder* decoder);
 
@@ -257,8 +258,7 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     }
     decoder->cc->hw_device_ctx = av_buffer_ref(hw_device_ctx);
     decoder->use_hwaccel = 1;
-    fprintf(stderr, "hardware acceleration enabled using %s\n", av_hwdevice_get_type_name(config->device_type));
-    
+
     return 0;
 
     fail:
@@ -419,7 +419,7 @@ void ffw_decoder_flush_buffers(Decoder* decoder) {
 
 int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
     int ret = avcodec_receive_frame(decoder->cc, decoder->frame);
-    
+
     if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
         return 0;
     } else if (ret < 0) {
@@ -441,6 +441,10 @@ int ffw_decoder_take_frame(Decoder* decoder, AVFrame** frame) {
     }
 
     return 1;
+}
+
+void ffw_decoder_set_discard(Decoder* decoder, int discard) {
+    decoder->cc->skip_frame = discard;
 }
 
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder) {
@@ -708,7 +712,7 @@ void ffw_encoder_set_max_b_frames(Encoder* encoder, int max_b_frames) {
 //     // We're just hardcoding some HDR values to see if this helps at all...
 //     /*
 //     These are from the test file:
-    
+
 //     color_range=tv
 //     color_space=bt2020nc
 //     color_transfer=arib-std-b67
