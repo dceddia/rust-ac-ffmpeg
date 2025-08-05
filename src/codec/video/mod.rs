@@ -252,6 +252,13 @@ impl VideoDecoder {
     pub fn builder(codec: &str) -> Result<VideoDecoderBuilder, Error> {
         VideoDecoderBuilder::new(codec)
     }
+
+    pub fn set_discard(&mut self, discard: std::ffi::c_int) -> Result<(), Error> {
+        unsafe {
+            super::ffw_decoder_set_discard(self.ptr, discard);
+            Ok(())
+        }
+    }
 }
 
 impl Decoder for VideoDecoder {
