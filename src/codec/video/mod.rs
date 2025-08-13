@@ -6,6 +6,9 @@ pub mod frame;
 pub mod pixel;
 pub mod scaler;
 
+#[cfg(target_os = "macos")]
+pub mod videotoolbox;
+
 use std::{
     ffi::{CStr, CString},
     os::raw::c_void,
