@@ -21,9 +21,6 @@ use crate::{
     Error,
 };
 
-const AVDISCARD_DEFAULT: c_int = 0;
-const AVDISCARD_ALL: c_int = 48;
-
 extern "C" {
     fn ffw_audio_codec_parameters_new(codec: *const c_char) -> *mut c_void;
     fn ffw_video_codec_parameters_new(codec: *const c_char) -> *mut c_void;

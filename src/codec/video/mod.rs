@@ -37,6 +37,9 @@ pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
     time_base: TimeBase,
     rotation: f64,
+
+    #[cfg(target_os = "macos")]
+    vt_decoder: Option<videotoolbox::VTDecoder>,
 }
 
 impl VideoDecoderBuilder {
@@ -50,6 +53,8 @@ impl VideoDecoderBuilder {
             ptr,
             time_base,
             rotation: 0.0,
+            #[cfg(target_os = "macos")]
+            vt_decoder: None,
         }
     }
 
@@ -164,10 +169,38 @@ impl VideoDecoderBuilder {
     }
 
     /// Try to enable hardware acceleration. If this fails, decoding will automatically fall back to software.
-    pub fn enable_hardware_accel(self) -> Self {
+    pub fn enable_hardware_accel(mut self) -> Result<Self, Error> {
         let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
 
-        self
+        #[cfg(target_os = "macos")]
+        {
+            let params = self.codec_parameters();
+            let Some(extradata) = params.extradata() else {
+                return Err(Error::new("missing extradata"));
+            };
+            let decoder = videotoolbox::VTDecoder::new(
+                params.width() as u32,
+                params.height() as u32,
+                extradata,
+                self.time_base,
+            )?;
+            self.vt_decoder = Some(decoder);
+        }
+
+        Ok(self)
+    }
+
+    /// Get the codec parameters.
+    pub fn codec_parameters(&self) -> VideoCodecParameters {
+        let ptr = unsafe { super::ffw_decoder_get_codec_parameters(self.ptr) };
+
+        if ptr.is_null() {
+            panic!("unable to allocate codec parameters");
+        }
+
+        let params = unsafe { CodecParameters::from_raw_ptr(ptr) };
+
+        params.into_video_codec_parameters().unwrap()
     }
 
     /// Set the rotation (in degrees)
@@ -193,6 +226,9 @@ impl VideoDecoderBuilder {
             ptr,
             time_base: self.time_base,
             rotation: self.rotation,
+
+            #[cfg(target_os = "macos")]
+            vt_decoder: self.vt_decoder.take(),
         };
 
         Ok(res)
@@ -215,6 +251,9 @@ pub struct VideoDecoder {
 
     /// The rotation of the underlying stream, in degrees.
     rotation: f64,
+
+    #[cfg(target_os = "macos")]
+    vt_decoder: Option<videotoolbox::VTDecoder>,
 }
 
 impl VideoDecoder {
@@ -283,6 +322,11 @@ impl Decoder for VideoDecoder {
     fn try_push(&mut self, packet: Packet) -> Result<(), CodecError> {
         let packet = packet.with_time_base(self.time_base);
 
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            return vt_decoder.try_push(packet);
+        }
+
         unsafe {
             match super::ffw_decoder_push_packet(self.ptr, packet.as_ptr()) {
                 1 => Ok(()),
@@ -295,6 +339,11 @@ impl Decoder for VideoDecoder {
     }
 
     fn try_flush(&mut self) -> Result<(), CodecError> {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            return vt_decoder.try_flush();
+        }
+
         unsafe {
             match super::ffw_decoder_push_packet(self.ptr, ptr::null()) {
                 1 => Ok(()),
@@ -307,10 +356,20 @@ impl Decoder for VideoDecoder {
     }
 
     fn flush_buffers(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            return vt_decoder.flush_buffers();
+        }
+
         unsafe { super::ffw_decoder_flush_buffers(self.ptr) }
     }
 
     fn take(&mut self) -> Result<Option<VideoFrame>, Error> {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            return vt_decoder.take();
+        }
+
         let mut fptr = ptr::null_mut();
 
         unsafe {

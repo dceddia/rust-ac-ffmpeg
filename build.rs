@@ -9,7 +9,7 @@ fn main() {
         build.include(dir);
     }
 
-    build
+    let build = build
         .file("src/error.c")
         .file("src/logger.c")
         .file("src/packet.c")
@@ -23,8 +23,12 @@ fn main() {
         .file("src/codec/frame.c")
         .file("src/codec/audio/resampler.c")
         .file("src/codec/video/scaler.c")
-        .file("src/render/gl_mac.c")
-        .compile("ffwrapper");
+        .file("src/render/gl_mac.c");
+
+    #[cfg(target_os = "macos")]
+    let build = build.file("src/codec/video/videotoolbox.c");
+
+    build.compile("ffwrapper");
 
     link_static("ffwrapper");
 
