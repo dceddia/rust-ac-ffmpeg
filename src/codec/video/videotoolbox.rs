@@ -99,8 +99,6 @@ impl VTDecoder {
             &*atoms,
         );
 
-        // this crashes
-        // let format_description = NonNull::<*const CMVideoFormatDescription>::dangling();
         // Allocate space for the output pointer
         let mut format_description_ptr: *const CMVideoFormatDescription = std::ptr::null();
 
@@ -149,7 +147,10 @@ impl VTDecoder {
             decompressionOutputRefCon: &ctx as *const _ as *mut c_void,
         };
 
-        let decompress_session = NonNull::<*mut VTDecompressionSession>::dangling();
+        let mut decompress_session_ptr: *mut VTDecompressionSession = std::ptr::null_mut();
+        let decompress_session =
+            NonNull::new(&mut decompress_session_ptr as *mut *mut VTDecompressionSession)
+                .expect("pointer to stack variable should never be null");
         let status = unsafe {
             VTDecompressionSession::create(
                 None,
@@ -203,7 +204,9 @@ impl VTDecoder {
         is_discard: bool,
     ) -> Result<(), CodecError> {
         // Create the CMBlockBuffer first
-        let block_buffer = NonNull::<*mut CMBlockBuffer>::dangling();
+        let mut block_buffer_ptr: *mut CMBlockBuffer = std::ptr::null_mut();
+        let block_buffer = NonNull::new(&mut block_buffer_ptr as *mut *mut CMBlockBuffer)
+            .expect("pointer to stack variable should never be null");
         let status = unsafe {
             CMBlockBuffer::create_with_memory_block(
                 None,
@@ -232,7 +235,9 @@ impl VTDecoder {
         };
 
         // Create a sample buffer from the block buffer
-        let sample_buffer = NonNull::<*mut CMSampleBuffer>::dangling();
+        let mut sample_buffer_ptr: *mut CMSampleBuffer = std::ptr::null_mut();
+        let sample_buffer = NonNull::new(&mut sample_buffer_ptr as *mut *mut CMSampleBuffer)
+            .expect("pointer to stack variable should never be null");
         let status = unsafe {
             CMSampleBuffer::create(
                 None,
