@@ -368,33 +368,6 @@ impl VideoFrameMut {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn from_videotoolbox(
-        cv_pixel_buffer: &objc2_core_video::CVPixelBuffer,
-        width: u32,
-        height: u32,
-        duration_ts: i64,
-    ) -> Self {
-        let ptr = unsafe {
-            use crate::codec::video::videotoolbox::ffw_frame_new_videotoolbox;
-            ffw_frame_new_videotoolbox(
-                cv_pixel_buffer as *const _ as _,
-                width as i32,
-                height as i32,
-                duration_ts,
-            )
-        };
-        if ptr.is_null() {
-            panic!("unable to allocate a video frame");
-        }
-        VideoFrameMut {
-            ptr,
-            time_base: TimeBase::MICROSECONDS,
-            is_blank: false,
-            rotation: 0.0,
-        }
-    }
-
     /// Get frame pixel format.
     pub fn pixel_format(&self) -> PixelFormat {
         unsafe { PixelFormat::from_raw(ffw_frame_get_format(self.ptr)) }

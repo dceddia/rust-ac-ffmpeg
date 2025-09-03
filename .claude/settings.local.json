@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:docs.rs)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(cargo check:*)",
+      "Bash(cargo:*)"
     ],
     "deny": [],
     "ask": []

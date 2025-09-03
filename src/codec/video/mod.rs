@@ -37,6 +37,7 @@ pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
     time_base: TimeBase,
     rotation: f64,
+    hwaccel_enabled: bool,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
@@ -53,6 +54,7 @@ impl VideoDecoderBuilder {
             ptr,
             time_base,
             rotation: 0.0,
+            hwaccel_enabled: false,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
         }
@@ -171,21 +173,7 @@ impl VideoDecoderBuilder {
     /// Try to enable hardware acceleration. If this fails, decoding will automatically fall back to software.
     pub fn enable_hardware_accel(mut self) -> Result<Self, Error> {
         let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
-
-        #[cfg(target_os = "macos")]
-        {
-            let params = self.codec_parameters();
-            let Some(extradata) = params.extradata() else {
-                return Err(Error::new("missing extradata"));
-            };
-            let decoder = videotoolbox::VTDecoder::new(
-                params.width() as u32,
-                params.height() as u32,
-                extradata,
-                self.time_base,
-            )?;
-            self.vt_decoder = Some(decoder);
-        }
+        self.hwaccel_enabled = true;
 
         Ok(self)
     }
@@ -218,8 +206,16 @@ impl VideoDecoderBuilder {
             }
         }
 
-        let ptr = self.ptr;
+        if self.hwaccel_enabled {
+            #[cfg(target_os = "macos")]
+            {
+                let params = self.codec_parameters();
+                let decoder = videotoolbox::VTDecoder::new(&params, self.time_base)?;
+                self.vt_decoder = Some(decoder);
+            }
+        }
 
+        let ptr = self.ptr;
         self.ptr = ptr::null_mut();
 
         let res = VideoDecoder {
@@ -367,7 +363,11 @@ impl Decoder for VideoDecoder {
     fn take(&mut self) -> Result<Option<VideoFrame>, Error> {
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
-            return vt_decoder.take();
+            return vt_decoder.take_frame().map(|f| {
+                f.map(|f| unsafe {
+                    VideoFrame::from_raw_ptr(f.av_frame, self.time_base, self.rotation)
+                })
+            });
         }
 
         let mut fptr = ptr::null_mut();

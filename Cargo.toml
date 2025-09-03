@@ -16,13 +16,6 @@ keywords = ["ffmpeg", "audio", "video", "codec", "multimedia"]
 lazy_static = "1.4"
 serde = { version = "1.0", optional = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-video-toolbox = "0.3"
-objc2-core-media = "0.3"
-objc2-core-video = "0.3"
-objc2-foundation = "0.3"
-objc2-core-foundation = "0.3"
-
 [build-dependencies]
 cc = "1.0"
 pkg-config = "0.3.16"
