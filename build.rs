@@ -43,6 +43,12 @@ fn main() {
     link("avutil", ffmpeg_link_mode);
     link("swresample", ffmpeg_link_mode);
     link("swscale", ffmpeg_link_mode);
+    
+    // Link VideoToolbox framework on macOS
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rustc-link-lib=framework=VideoToolbox");
+    }
 }
 
 fn ffmpeg_include_dirs() -> Vec<PathBuf> {
