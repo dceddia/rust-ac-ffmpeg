@@ -25,6 +25,8 @@ fn main() {
         .file("src/codec/video/scaler.c")
         .compile("ffwrapper");
 
+    println!("cargo:rerun-if-changed=src");
+
     link_static("ffwrapper");
 
     for dir in ffmpeg_lib_dirs() {
