@@ -46,7 +46,7 @@ extern "C" {
     fn ffw_frame_get_line_count(frame: *const c_void, plane: usize) -> usize;
     fn ffw_frame_get_pkt_duration(frame: *const c_void) -> i64;
     fn ffw_frame_get_repeat_pict(frame: *const c_void) -> c_int;
-    fn ffw_frame_get_hw_frames_ctx(frame: *const c_void) -> *mut c_void;
+    fn ffw_frame_is_hardware(frame: *const c_void) -> c_int;
     fn ffw_frame_copy_props(dest: *mut c_void, src: *const c_void) -> c_int;
     fn ffw_frame_clone(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_free(frame: *mut c_void);
@@ -616,7 +616,7 @@ impl VideoFrame {
 
     /// Check if this frame is hardware-backed
     pub fn is_hw_frame(&self) -> bool {
-        unsafe { !ffw_frame_get_hw_frames_ctx(self.ptr).is_null() }
+        unsafe { ffw_frame_is_hardware(self.ptr) != 0 }
     }
 
     /// Copy this hardware-backed frame to system memory.
