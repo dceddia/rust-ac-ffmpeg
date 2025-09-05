@@ -46,6 +46,11 @@ void ffw_packet_set_dts(AVPacket* packet, int64_t dts) {
     packet->dts = dts;
 }
 
+void ffw_packet_set_time_base(AVPacket* packet, int num, int den) {
+    packet->time_base.num = num;
+    packet->time_base.den = den;
+}
+
 int ffw_packet_get_stream_index(const AVPacket* packet) {
     return packet->stream_index;
 }
