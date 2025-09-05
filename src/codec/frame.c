@@ -324,6 +324,6 @@ int ffw_frame_get_repeat_pict(AVFrame *frame) {
     return frame->repeat_pict;
 }
 
-void* ffw_frame_get_hw_frames_ctx(AVFrame *frame) {
-    return frame->hw_frames_ctx;
+int ffw_frame_is_hardware(AVFrame *frame) {
+    return frame->hw_frames_ctx != NULL || frame->data[3] != NULL;
 }
