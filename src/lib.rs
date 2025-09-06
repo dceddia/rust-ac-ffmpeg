@@ -5,6 +5,7 @@ pub mod codec;
 pub mod format;
 pub mod packet;
 pub mod render;
+pub mod reorder_buffer;
 pub mod time;
 
 use std::{
