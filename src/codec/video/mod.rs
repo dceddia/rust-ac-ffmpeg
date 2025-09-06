@@ -19,6 +19,7 @@ use crate::{
     codec::{CodecError, CodecParameters, Decoder, Encoder, VideoCodecParameters},
     format::stream::Stream,
     packet::Packet,
+    reorder_buffer::ReorderBuffer,
     time::TimeBase,
     Error,
 };
@@ -39,6 +40,8 @@ pub struct VideoDecoderBuilder {
     rotation: f64,
     hwaccel_enabled: bool,
 
+    enable_reordering: bool,
+
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
 }
@@ -55,6 +58,7 @@ impl VideoDecoderBuilder {
             time_base,
             rotation: 0.0,
             hwaccel_enabled: false,
+            enable_reordering: false,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
         }
@@ -198,6 +202,21 @@ impl VideoDecoderBuilder {
         self
     }
 
+    /// Enable frame reordering to handle B-frames and out-of-order presentation timestamps.
+    /// This adds a buffer that collects frames until full, then outputs them in PTS order.
+    pub fn enable_reordering(mut self) -> Self {
+        self.enable_reordering = true;
+
+        self
+    }
+
+    /// Disable frame reordering (default behavior).
+    pub fn disable_reordering(mut self) -> Self {
+        self.enable_reordering = false;
+
+        self
+    }
+
     /// Build the decoder.
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
         unsafe {
@@ -216,12 +235,26 @@ impl VideoDecoderBuilder {
         }
 
         let ptr = self.ptr;
+
+        let reorder_buffer = if self.enable_reordering {
+            let b_frames = unsafe { super::ffw_decoder_get_b_frames(self.ptr) };
+            if b_frames > 0 {
+                // +1 because ffmpeg's has_b_frames is 1 less than the size of the reorder buffer
+                Some(ReorderBuffer::new((b_frames + 1) as usize))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.ptr = ptr::null_mut();
 
         let res = VideoDecoder {
             ptr,
             time_base: self.time_base,
             rotation: self.rotation,
+            reorder_buffer,
 
             #[cfg(target_os = "macos")]
             vt_decoder: self.vt_decoder.take(),
@@ -247,6 +280,9 @@ pub struct VideoDecoder {
 
     /// The rotation of the underlying stream, in degrees.
     rotation: f64,
+
+    /// Frame reordering buffer for handling out-of-order frames (B-frames).
+    reorder_buffer: Option<ReorderBuffer>,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
@@ -361,6 +397,35 @@ impl Decoder for VideoDecoder {
     }
 
     fn take(&mut self) -> Result<Option<VideoFrame>, Error> {
+        if self.reorder_buffer.is_none() {
+            return self.take_frame_inner();
+        }
+
+        match self.take_frame_inner()? {
+            None => Ok(None),
+            Some(frame) => {
+                let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
+                if !reorder_buffer.is_full() {
+                    reorder_buffer.push(frame);
+                } else {
+                    panic!("reorder buffer should not be full yet");
+                }
+
+                // If it's full, reordering is done and we're ready to pop a frame.
+                // If not, we need to wait for more frames.
+                if reorder_buffer.is_full() {
+                    Ok(reorder_buffer.pop())
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+}
+
+impl VideoDecoder {
+    /// Get a frame from the underlying decoder
+    fn take_frame_inner(&mut self) -> Result<Option<VideoFrame>, Error> {
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.take_frame().map(|f| {

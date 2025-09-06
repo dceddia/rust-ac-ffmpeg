@@ -1,8 +1,9 @@
-use std::ffi::{c_void};
+use std::ffi::c_void;
+use std::sync::mpsc::TryRecvError;
 
 use crate::codec::CodecError;
 use crate::packet::{Packet, PacketMut};
-use crate::time::{TimeBase};
+use crate::time::TimeBase;
 use crate::{codec::VideoCodecParameters, Error};
 
 pub struct DecodedFrame {
@@ -12,7 +13,7 @@ pub struct DecodedFrame {
 pub struct VTDecoder {
     vt_decoder_ptr: *mut c_void,
     #[allow(dead_code)]
-    time_base: TimeBase,  // Kept for potential future use
+    time_base: TimeBase, // Kept for potential future use
     #[allow(dead_code)]
     frame_tx: std::sync::mpsc::Sender<DecodedFrame>, // Kept for potential future use
     frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
@@ -48,6 +49,10 @@ unsafe extern "C" fn rust_frame_callback(context: *mut c_void, frame: *mut c_voi
 
 impl VTDecoder {
     pub fn new(params: &VideoCodecParameters, time_base: TimeBase) -> Result<VTDecoder, Error> {
+        // TODO NEXT: Maybe use a channel to send packets to the decoder? (and put the decoder in a separate thread)
+        // Gotta fix the issue where it either freezes (using .recv()) or decodes infinitely-ish (using .try_recv()).
+        // This might just be a mismatch between sync and async methods of decoding and it might not be possible to
+        // express them both with the same API? I'm not sure though.
         let (frame_tx, frame_rx) = std::sync::mpsc::channel();
 
         // We need to pass a pointer to the sender that will outlive this function
@@ -88,12 +93,13 @@ impl VTDecoder {
     }
 
     pub fn try_push(&mut self, packet: Packet) -> Result<(), CodecError> {
+        let packet = packet.with_time_base(self.time_base);
         self.decode_frame(packet)
     }
 
     pub fn try_flush(&mut self) -> Result<(), CodecError> {
         // Push an empty packet
-        let packet = PacketMut::new(0).freeze();
+        let packet = PacketMut::new(0).with_time_base(self.time_base).freeze();
         self.decode_frame(packet)
     }
 
@@ -106,10 +112,10 @@ impl VTDecoder {
     }
 
     pub fn take_frame(&mut self) -> Result<Option<DecodedFrame>, Error> {
-        if let Ok(decoded_frame) = self.frame_rx.try_recv() {
-            Ok(Some(decoded_frame))
-        } else {
-            Ok(None)
+        match self.frame_rx.try_recv() {
+            Ok(decoded_frame) => Ok(Some(decoded_frame)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(Error::new("Receiver disconnected")),
         }
     }
 
@@ -119,8 +125,6 @@ impl VTDecoder {
         // TODO: Add VTDecompressionSession flush if needed
     }
 }
-
-// Removed - callback is now handled by rust_frame_callback
 
 impl Drop for VTDecoder {
     fn drop(&mut self) {
@@ -139,4 +143,3 @@ impl Drop for VTDecoder {
         }
     }
 }
-
