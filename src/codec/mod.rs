@@ -74,6 +74,7 @@ extern "C" {
     fn ffw_decoder_push_packet(decoder: *mut c_void, packet: *const c_void) -> c_int;
     fn ffw_decoder_take_frame(decoder: *mut c_void, frame: *mut *mut c_void) -> c_int;
     fn ffw_decoder_set_discard(decoder: *mut c_void, discard: c_int);
+    fn ffw_decoder_get_b_frames(decoder: *const c_void) -> c_int;
     fn ffw_decoder_flush_buffers(decoder: *mut c_void);
     fn ffw_decoder_get_codec_parameters(decoder: *const c_void) -> *mut c_void;
     fn ffw_decoder_free(decoder: *mut c_void);
