@@ -447,6 +447,11 @@ void ffw_decoder_set_discard(Decoder* decoder, int discard) {
     decoder->cc->skip_frame = discard;
 }
 
+int ffw_decoder_get_b_frames(const Decoder* decoder) {
+    // Size of the frame reordering buffer in the decoder.
+    return decoder->cc->has_b_frames;
+}
+
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder) {
     AVCodecParameters* params;
     int ret;
