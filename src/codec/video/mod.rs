@@ -333,6 +333,30 @@ impl VideoDecoder {
             Ok(())
         }
     }
+
+    /// Can this decoder be reused to decode another stream?
+    pub fn can_decode_params(&self, params: &VideoCodecParameters) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &self.vt_decoder {
+            return vt_decoder.can_decode_params(params);
+        }
+
+        // For software decoders, just recreate it for now
+        // Not sure how expensive this is?
+        false
+    }
+
+    pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            let packet = packet.with_time_base(self.time_base);
+            return vt_decoder
+                .push_with_reset(packet)
+                .map_err(|err| err.unwrap_inner());
+        }
+
+        self.push(packet)
+    }
 }
 
 impl Decoder for VideoDecoder {
