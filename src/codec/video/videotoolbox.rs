@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::sync::mpsc::TryRecvError;
+use std::time::Instant;
 
 use crate::codec::CodecError;
 use crate::packet::{Packet, PacketMut};
@@ -29,7 +30,16 @@ extern "C" {
         callback: RustFrameCallback,
         callback_context: *mut c_void,
     ) -> *mut c_void;
-    pub(crate) fn vt_decode_frame(decoder: *mut c_void, packet: *const c_void) -> i32;
+    pub(crate) fn vt_decode_frame(
+        decoder: *mut c_void,
+        packet: *const c_void,
+        reset_decoder: i32,
+    ) -> i32;
+    pub(crate) fn vt_decoder_can_decode_params(
+        existing_decoder: *mut c_void,
+        params: *const c_void,
+    ) -> i32;
+    pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
 }
 
@@ -93,18 +103,32 @@ impl VTDecoder {
     }
 
     pub fn try_push(&mut self, packet: Packet) -> Result<(), CodecError> {
-        let packet = packet.with_time_base(self.time_base);
         self.decode_frame(packet)
+    }
+
+    pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), CodecError> {
+        let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 1) };
+        if ret < 0 {
+            return Err(CodecError::from_raw_error_code(ret));
+        }
+        Ok(())
     }
 
     pub fn try_flush(&mut self) -> Result<(), CodecError> {
+        unsafe { vt_decoder_flush(self.vt_decoder_ptr) };
+        Ok(())
         // Push an empty packet
-        let packet = PacketMut::new(0).with_time_base(self.time_base).freeze();
-        self.decode_frame(packet)
+        // let packet = PacketMut::new(0).with_time_base(self.time_base).freeze();
+        // self.decode_frame(packet)
+    }
+
+    /// Can this decoder be reused to decode another stream?
+    pub fn can_decode_params(&self, params: &VideoCodecParameters) -> bool {
+        unsafe { vt_decoder_can_decode_params(self.vt_decoder_ptr, params.as_ptr()) == 1 }
     }
 
     fn decode_frame(&mut self, packet: Packet) -> Result<(), CodecError> {
-        let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr()) };
+        let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 0) };
         if ret < 0 {
             return Err(CodecError::from_raw_error_code(ret));
         }

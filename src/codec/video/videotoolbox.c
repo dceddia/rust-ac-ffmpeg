@@ -9,6 +9,7 @@
 #include <libavutil/samplefmt.h>
 #include <libavutil/hwcontext.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec_par.h>
 #include <libavcodec/packet.h>
 #include <CoreVideo/CoreVideo.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -44,6 +45,7 @@ static void didDecompress(
 );
 
 typedef struct VTDecoder {
+    AVCodecParameters *params;
     CMVideoFormatDescriptionRef formatDecsription;
     VTDecompressionSessionRef decompressSession;
     RustFrameCallback rust_callback;
@@ -79,6 +81,35 @@ static void dict_set_object(CFMutableDictionaryRef dict, CFStringRef key, CFType
     CFDictionarySetValue(dict, key, value);
 }
 
+// Check if an existing decoder's params match some other set of params
+int vt_decoder_can_decode_params(VTDecoder *existing_decoder, AVCodecParameters *params) {
+    if (!existing_decoder || !params) {
+        return 0;
+    }
+
+    if (existing_decoder->params->width != params->width || existing_decoder->params->height != params->height) {
+        printf("vt_decoder_can_decode_params: width or height mismatch %dx%d vs %dx%d\n", existing_decoder->params->width, existing_decoder->params->height, params->width, params->height);
+        return 0;
+    }
+
+    if (existing_decoder->params->extradata_size != params->extradata_size) {
+        printf("vt_decoder_can_decode_params: extradata size mismatch\n");
+        return 0;
+    }
+
+    if (memcmp(existing_decoder->params->extradata, params->extradata, params->extradata_size) != 0) {
+        printf("vt_decoder_can_decode_params: extradata mismatch\n");
+        return 0;
+    }
+
+    if (existing_decoder->params->codec_id != params->codec_id) {
+        printf("vt_decoder_can_decode_params: codec ID mismatch\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callback, void *callback_context) {
     int width = params->width;
     int height = params->height;
@@ -90,7 +121,19 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     if(!decoder) {
         return NULL;
     }
-    
+
+    AVCodecParameters *params_copy = avcodec_parameters_alloc();
+    if (!params_copy) {
+        free(decoder);
+        return NULL;
+    }
+    if(avcodec_parameters_copy(params_copy, params) < 0) {
+        avcodec_parameters_free(&params_copy);
+        free(decoder);
+        return NULL;
+    }
+
+    decoder->params = params_copy;
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
 
@@ -110,7 +153,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     dict_set_object(extensions, CFSTR ("CVPixelAspectRatio"), (CFTypeRef *) par);
     dict_set_object(extensions, CFSTR ("SampleDescriptionExtensionAtoms"), (CFTypeRef *) atoms);
 
-    status = CMVideoFormatDescriptionCreate(NULL, kCMVideoCodecType_H264, width, height, extensions, &(decoder->formatDecsription));
+    status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault, kCMVideoCodecType_H264, width, height, extensions, &(decoder->formatDecsription));
 
     CFRelease(extensions);
     CFRelease(atoms);
@@ -130,9 +173,14 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferHeightKey, height);
     dict_set_boolean(destinationPixelBufferAttributes, kCVPixelBufferMetalCompatibilityKey, true);
 
+    CFMutableDictionaryRef decoderSpec = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    dict_set_boolean(decoderSpec, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, true);
+
     outputCallback.decompressionOutputCallback = didDecompress;
     outputCallback.decompressionOutputRefCon = decoder;
-    status = VTDecompressionSessionCreate(kCFAllocatorDefault, decoder->formatDecsription, NULL, destinationPixelBufferAttributes, &outputCallback, &(decoder->decompressSession));
+    // NOTE: This is a very expensive call! I've seen it take anywhere from 9ms to 67ms.
+    // Definitely try to avoid calling vt_decoder_create more than necessary.
+    status = VTDecompressionSessionCreate(kCFAllocatorDefault, decoder->formatDecsription, decoderSpec, destinationPixelBufferAttributes, &outputCallback, &(decoder->decompressSession));
     if (status != noErr) {
         printf("Error: Creating decompression session failed with code %d\n", status);
         return NULL;
@@ -145,20 +193,24 @@ void vt_decoder_free(VTDecoder *decoder) {
     if (!decoder) {
         return;
     }
-    
+
     if (decoder->decompressSession) {
         VTDecompressionSessionInvalidate(decoder->decompressSession);
         CFRelease(decoder->decompressSession);
     }
-    
+
     if (decoder->formatDecsription) {
         CFRelease(decoder->formatDecsription);
     }
-    
+
+    if (decoder->params) {
+        avcodec_parameters_free(&decoder->params);
+    }
+
     free(decoder);
 }
 
-int vt_decode_frame(VTDecoder *decoder, AVPacket* packet) {
+int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
     CVPixelBufferRef outputPixelBuffer = NULL;
     CMBlockBufferRef blockBuffer = NULL;
@@ -170,7 +222,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet) {
 
     CMSampleBufferRef sampleBuffer = NULL;
     const size_t sampleSizeArray[] = { packet->size };
-    
+
     // Set up timing info from AVPacket
     CMTime presentationTime = CMTimeMake(packet->pts * packet->time_base.num, packet->time_base.den);
     CMTime duration = CMTimeMake(packet->duration * packet->time_base.num, packet->time_base.den);
@@ -180,7 +232,14 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet) {
         .presentationTimeStamp = presentationTime,
         .decodeTimeStamp = decodeTimeStamp
     };
-    
+
+    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;// | kVTDecodeFrame_EnableTemporalProcessing;
+
+    // Performance improvement: don't produce a frame if it will not be displayed. HUGE speedup.
+    if(packet->flags & AV_PKT_FLAG_DISCARD) {
+        flags |= kVTDecodeFrame_DoNotOutputFrame;
+    }
+
     status = CMSampleBufferCreateReady(kCFAllocatorDefault,
                                        blockBuffer,
                                        decoder->formatDecsription,
@@ -195,11 +254,24 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet) {
         return -1;
     }
 
-    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression | kVTDecodeFrame_EnableTemporalProcessing;
+    // Set sample attachments based on DISCARD flag
+    CFArrayRef sampleAttachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, true);
+    if (sampleAttachmentsArray && CFArrayGetCount(sampleAttachmentsArray) > 0) {
+        CFMutableDictionaryRef sampleAttachments = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(sampleAttachmentsArray, 0);
 
-    // Performance improvement: don't produce a frame if it will not be displayed. HUGE speedup.
-    if(packet->flags & AVDISCARD_ALL) {
-      flags |= kVTDecodeFrame_DoNotOutputFrame;
+        if (reset_decoder) {
+            CFDictionarySetValue(sampleAttachments, kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding, kCFBooleanTrue);
+        }
+
+        // More attempts at performance improvement during seeking, not sure if this helps honestly.
+        // QuickTime sets these keys though.
+        if (packet->flags & AV_PKT_FLAG_DISCARD) {
+            //CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
+            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, kCFBooleanTrue);
+        } else {
+            // CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
+            //CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        }
     }
 
     VTDecodeInfoFlags flagOut = 0;
@@ -240,14 +312,14 @@ static void didDecompress(void *decompressionOutputRefCon,
     if (!decoder || !decoder->rust_callback) {
         return;
     }
-    
+
     // Call the Rust callback with NULL if pixelBuffer is NULL (for DoNotDisplay frames)
     if (pixelBuffer == NULL) {
         printf("NULL frame callback (DoNotDisplay frame)\n");
         decoder->rust_callback(decoder->rust_context, NULL);
         return;
     }
-    
+
     // Create an AVFrame and populate it with the decoded data
     AVFrame *frame = av_frame_alloc();
     if (!frame) {
@@ -261,7 +333,7 @@ static void didDecompress(void *decompressionOutputRefCon,
         return;
     }
     hw_frame->pixbuf = CVPixelBufferRetain(pixelBuffer);
-    
+
     // Create AVBufferRef with custom release function. av_frame_clone needs this in buf[0] in order
     // to know that the frame is refcounted, and will ref and unref this buffer appropriately.
     AVBufferRef *buf = av_buffer_create((uint8_t*)hw_frame, sizeof(VTHWFrame),
@@ -273,25 +345,33 @@ static void didDecompress(void *decompressionOutputRefCon,
         return;
     }
     frame->buf[0] = buf;
-    
+
     // Get dimensions from the pixel buffer
     size_t width = CVPixelBufferGetWidth(pixelBuffer);
     size_t height = CVPixelBufferGetHeight(pixelBuffer);
-    
+
     // Set up the frame
     frame->format = AV_PIX_FMT_VIDEOTOOLBOX;
     frame->width = width;
     frame->height = height;
     frame->data[3] = (uint8_t *)CVPixelBufferRetain(pixelBuffer);
-    
+
     // Set timing information
     frame->pts = presentationTimeStamp.value;
     frame->pkt_duration = presentationDuration.value;
     frame->time_base.num = 1;
     frame->time_base.den = presentationTimeStamp.timescale;
-    
+
     // Call the Rust callback
     decoder->rust_callback(decoder->rust_context, frame);
-    
+
     // Note: The Rust side is responsible for calling av_frame_free when done
+}
+
+void vt_decoder_flush(VTDecoder *decoder) {
+    if (!decoder) {
+        return;
+    }
+
+    VTDecompressionSessionFinishDelayedFrames(decoder->decompressSession);
 }
