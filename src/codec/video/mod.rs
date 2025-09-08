@@ -346,10 +346,17 @@ impl VideoDecoder {
         false
     }
 
+    pub fn clear_reorder_buffer(&mut self) {
+        self.reorder_buffer.as_mut().map(|buf| buf.clear());
+    }
+
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
+        self.clear_reorder_buffer();
+
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             let packet = packet.with_time_base(self.time_base);
+
             return vt_decoder
                 .push_with_reset(packet)
                 .map_err(|err| err.unwrap_inner());
@@ -454,7 +461,7 @@ impl VideoDecoder {
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.take_frame().map(|f| {
                 f.map(|f| unsafe {
-                    VideoFrame::from_raw_ptr(f.av_frame, self.time_base, self.rotation)
+                    VideoFrame::from_raw_ptr(f.into_raw_ptr(), self.time_base, self.rotation)
                 })
             });
         }

@@ -25,6 +25,7 @@ pub struct VTDecoder {
 type RustFrameCallback = unsafe extern "C" fn(context: *mut c_void, frame: *mut c_void);
 
 extern "C" {
+    fn ffw_frame_free(frame: *mut c_void);
     pub(crate) fn vt_decoder_create(
         av_codec_context: *const c_void,
         callback: RustFrameCallback,
@@ -55,6 +56,26 @@ unsafe extern "C" fn rust_frame_callback(context: *mut c_void, frame: *mut c_voi
     // Get the sender from the context
     let sender = &*(context as *const std::sync::mpsc::Sender<DecodedFrame>);
     let _ = sender.send(decoded_frame);
+}
+
+impl Drop for DecodedFrame {
+    fn drop(&mut self) {
+        if !self.av_frame.is_null() {
+            unsafe {
+                ffw_frame_free(self.av_frame);
+            }
+        }
+    }
+}
+
+impl DecodedFrame {
+    /// Transfer ownership of the raw AVFrame pointer, setting internal pointer to null
+    /// to prevent double-free when this DecodedFrame is dropped.
+    pub fn into_raw_ptr(mut self) -> *mut c_void {
+        let ptr = self.av_frame;
+        self.av_frame = std::ptr::null_mut();
+        ptr
+    }
 }
 
 impl VTDecoder {

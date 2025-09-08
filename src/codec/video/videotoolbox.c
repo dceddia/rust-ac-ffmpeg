@@ -181,6 +181,8 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     // NOTE: This is a very expensive call! I've seen it take anywhere from 9ms to 67ms.
     // Definitely try to avoid calling vt_decoder_create more than necessary.
     status = VTDecompressionSessionCreate(kCFAllocatorDefault, decoder->formatDecsription, decoderSpec, destinationPixelBufferAttributes, &outputCallback, &(decoder->decompressSession));
+    CFRelease(decoderSpec);
+    CFRelease(destinationPixelBufferAttributes);
     if (status != noErr) {
         printf("Error: Creating decompression session failed with code %d\n", status);
         return NULL;
@@ -211,7 +213,6 @@ void vt_decoder_free(VTDecoder *decoder) {
 }
 
 int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
-
     CVPixelBufferRef outputPixelBuffer = NULL;
     CMBlockBufferRef blockBuffer = NULL;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, (void *)packet->data, packet->size, kCFAllocatorNull, NULL, 0, packet->size, 0, &blockBuffer);
@@ -354,7 +355,7 @@ static void didDecompress(void *decompressionOutputRefCon,
     frame->format = AV_PIX_FMT_VIDEOTOOLBOX;
     frame->width = width;
     frame->height = height;
-    frame->data[3] = (uint8_t *)CVPixelBufferRetain(pixelBuffer);
+    frame->data[3] = (uint8_t *)pixelBuffer;
 
     // Set timing information
     frame->pts = presentationTimeStamp.value;
