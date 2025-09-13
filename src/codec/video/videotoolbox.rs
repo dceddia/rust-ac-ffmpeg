@@ -165,9 +165,13 @@ impl VTDecoder {
     }
 
     pub fn flush_buffers(&mut self) {
-        // Drain any pending frames from the channel
-        while self.frame_rx.try_recv().is_ok() {}
-        // TODO: Add VTDecompressionSession flush if needed
+        println!("flushing decoder (finish + wait for delayed frames");
+        let _ = self.try_flush();
+        let mut i = 0;
+        while self.frame_rx.try_recv().is_ok() {
+            i += 1
+        }
+        println!("flushed {} frames", i);
     }
 }
 
