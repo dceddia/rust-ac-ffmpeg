@@ -316,7 +316,6 @@ static void didDecompress(void *decompressionOutputRefCon,
 
     // Call the Rust callback with NULL if pixelBuffer is NULL (for DoNotDisplay frames)
     if (pixelBuffer == NULL) {
-        printf("NULL frame callback (DoNotDisplay frame)\n");
         decoder->rust_callback(decoder->rust_context, NULL);
         return;
     }
