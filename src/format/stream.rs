@@ -18,6 +18,7 @@ extern "C" {
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
     fn ffw_stream_get_nb_frames(stream: *const c_void) -> i64;
     fn ffw_stream_get_r_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
+    fn ffw_stream_get_avg_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
     fn ffw_stream_get_rotation(stream: *const c_void) -> f64;
     fn ffw_stream_set_discard(stream: *mut c_void, discard: c_int);
     fn ffw_stream_get_codec_parameters(stream: *const c_void) -> *mut c_void;
@@ -96,6 +97,19 @@ impl Stream {
         let mut den = 0_u32;
 
         unsafe { ffw_stream_get_r_frame_rate(self.ptr, &mut num, &mut den) };
+
+        // avoid division by zero
+        let den = if den > 0 { den } else { 1 };
+
+        TimeBase::new(num, den)
+    }
+
+    /// Get the avg_frame_rate
+    pub fn avg_frame_rate(&self) -> TimeBase {
+        let mut num = 0_u32;
+        let mut den = 0_u32;
+
+        unsafe { ffw_stream_get_avg_frame_rate(self.ptr, &mut num, &mut den) };
 
         // avoid division by zero
         let den = if den > 0 { den } else { 1 };
