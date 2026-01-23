@@ -181,7 +181,7 @@ impl Plane<'_> {
     }
 
     /// Get an iterator over all lines.
-    pub fn lines(&self) -> LinesIter {
+    pub fn lines(&self) -> LinesIter<'_> {
         let line_size = self.line_size();
         let data = self.data();
 
@@ -189,7 +189,7 @@ impl Plane<'_> {
     }
 
     /// Get an iterator over all mutable lines.
-    pub fn lines_mut(&mut self) -> LinesIterMut {
+    pub fn lines_mut(&mut self) -> LinesIterMut<'_> {
         let line_size = self.line_size();
         let data = self.data_mut();
 
@@ -434,7 +434,7 @@ impl VideoFrameMut {
     }
 
     /// Get picture planes.
-    pub fn planes(&self) -> Planes {
+    pub fn planes(&self) -> Planes<'_> {
         Planes::from(self)
     }
 
@@ -451,7 +451,7 @@ impl VideoFrameMut {
     }
 
     /// Get mutable picture planes.
-    pub fn planes_mut(&mut self) -> PlanesMut {
+    pub fn planes_mut(&mut self) -> PlanesMut<'_> {
         PlanesMut::from(self)
     }
 
@@ -564,7 +564,7 @@ impl VideoFrame {
     }
 
     /// Get picture planes.
-    pub fn planes(&self) -> Planes {
+    pub fn planes(&self) -> Planes<'_> {
         Planes::from(self)
     }
 

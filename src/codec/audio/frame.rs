@@ -335,12 +335,12 @@ impl AudioFrameMut {
     }
 
     /// Get sample data planes for this frame.
-    pub fn planes(&self) -> Planes {
+    pub fn planes(&self) -> Planes<'_> {
         Planes::from(self)
     }
 
     /// Get mutable sample data planes for this frame.
-    pub fn planes_mut(&mut self) -> PlanesMut {
+    pub fn planes_mut(&mut self) -> PlanesMut<'_> {
         PlanesMut::from(self)
     }
 
@@ -490,7 +490,7 @@ impl AudioFrame {
     }
 
     /// Get sample data planes for this frame.
-    pub fn planes(&self) -> Planes {
+    pub fn planes(&self) -> Planes<'_> {
         Planes::from(self)
     }
 
