@@ -15,6 +15,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 
 // A struct to hold a reference to the pixel buffer. This gets stored on the frame (AVFrame)
@@ -50,6 +51,9 @@ typedef struct VTDecoder {
     VTDecompressionSessionRef decompressSession;
     RustFrameCallback rust_callback;
     void *rust_context;
+    uint64_t generation;  // Incremented on flush/seek to filter stale async frames
+    AVBufferRef *hw_device_ref;   // Hardware device context
+    AVBufferRef *hw_frames_ref;   // Hardware frames context
 } VTDecoder;
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
@@ -136,6 +140,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->params = params_copy;
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
+    decoder->generation = 0;
 
     CFMutableDictionaryRef par = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
@@ -188,6 +193,41 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
         return NULL;
     }
 
+    // Set up hardware device and frames context for av_hwframe_transfer_data support
+    decoder->hw_device_ref = NULL;
+    decoder->hw_frames_ref = NULL;
+
+    // Create VideoToolbox hardware device context
+    int ret = av_hwdevice_ctx_create(&decoder->hw_device_ref, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, NULL, NULL, 0);
+    if (ret < 0) {
+        printf("Warning: Failed to create VideoToolbox device context: %d\n", ret);
+        // Continue without hw context - frames will still work but copy_to_software won't
+        return decoder;
+    }
+
+    // Create hardware frames context
+    decoder->hw_frames_ref = av_hwframe_ctx_alloc(decoder->hw_device_ref);
+    if (!decoder->hw_frames_ref) {
+        printf("Warning: Failed to allocate hardware frames context\n");
+        av_buffer_unref(&decoder->hw_device_ref);
+        return decoder;
+    }
+
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext *)decoder->hw_frames_ref->data;
+    frames_ctx->format = AV_PIX_FMT_VIDEOTOOLBOX;
+    frames_ctx->sw_format = AV_PIX_FMT_NV12;  // VideoToolbox outputs NV12
+    frames_ctx->width = width;
+    frames_ctx->height = height;
+
+    ret = av_hwframe_ctx_init(decoder->hw_frames_ref);
+    if (ret < 0) {
+        printf("Warning: Failed to initialize hardware frames context: %d\n", ret);
+        av_buffer_unref(&decoder->hw_frames_ref);
+        av_buffer_unref(&decoder->hw_device_ref);
+        decoder->hw_frames_ref = NULL;
+        decoder->hw_device_ref = NULL;
+    }
+
     return decoder;
 }
 
@@ -209,11 +249,18 @@ void vt_decoder_free(VTDecoder *decoder) {
         avcodec_parameters_free(&decoder->params);
     }
 
+    if (decoder->hw_frames_ref) {
+        av_buffer_unref(&decoder->hw_frames_ref);
+    }
+
+    if (decoder->hw_device_ref) {
+        av_buffer_unref(&decoder->hw_device_ref);
+    }
+
     free(decoder);
 }
 
 int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
-    CVPixelBufferRef outputPixelBuffer = NULL;
     CMBlockBufferRef blockBuffer = NULL;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, (void *)packet->data, packet->size, kCFAllocatorNull, NULL, 0, packet->size, 0, &blockBuffer);
     if (status != kCMBlockBufferNoErr) {
@@ -276,7 +323,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     }
 
     VTDecodeInfoFlags flagOut = 0;
-    status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, &outputPixelBuffer, &flagOut);
+    status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
     switch (status) {
         case noErr:
             break;
@@ -302,7 +349,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 }
 
 static void didDecompress(void *decompressionOutputRefCon,
-                          void *sourceFrameRefCon __attribute__((unused)),
+                          void *sourceFrameRefCon,
                           OSStatus status __attribute__((unused)),
                           VTDecodeInfoFlags infoFlags __attribute__((unused)),
                           CVImageBufferRef pixelBuffer,
@@ -311,6 +358,12 @@ static void didDecompress(void *decompressionOutputRefCon,
 {
     VTDecoder *decoder = (VTDecoder *)decompressionOutputRefCon;
     if (!decoder || !decoder->rust_callback) {
+        return;
+    }
+
+    // Filter out stale frames from before a seek/flush
+    uint64_t frame_generation = (uint64_t)(uintptr_t)sourceFrameRefCon;
+    if (frame_generation != decoder->generation) {
         return;
     }
 
@@ -356,6 +409,22 @@ static void didDecompress(void *decompressionOutputRefCon,
     frame->height = height;
     frame->data[3] = (uint8_t *)pixelBuffer;
 
+    // Set hw_frames_ctx so av_hwframe_transfer_data works
+    if (decoder->hw_frames_ref) {
+        frame->hw_frames_ctx = av_buffer_ref(decoder->hw_frames_ref);
+    }
+
+    // Set color information from codec parameters
+    frame->color_range = decoder->params->color_range;
+    frame->colorspace = decoder->params->color_space;
+    frame->color_primaries = decoder->params->color_primaries;
+    frame->color_trc = decoder->params->color_trc;
+
+    // VideoToolbox outputs video range by default, so if unspecified, assume video range
+    if (frame->color_range == AVCOL_RANGE_UNSPECIFIED) {
+        frame->color_range = AVCOL_RANGE_MPEG;  // Video range (16-235)
+    }
+
     // Set timing information
     frame->pts = presentationTimeStamp.value;
     frame->pkt_duration = presentationDuration.value;
@@ -373,5 +442,6 @@ void vt_decoder_flush(VTDecoder *decoder) {
         return;
     }
 
+    decoder->generation++;
     VTDecompressionSessionFinishDelayedFrames(decoder->decompressSession);
 }

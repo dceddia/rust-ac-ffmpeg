@@ -13,6 +13,10 @@ typedef struct FrameScaler {
 
     // Byte alignment of the lines of the output frames
     int align;
+
+    // Track the last color info we configured, to avoid reconfiguring every frame
+    int last_colorspace;
+    int last_color_range;
 } FrameScaler;
 
 FrameScaler* ffw_frame_scaler_new(
@@ -59,6 +63,10 @@ FrameScaler* ffw_frame_scaler_new(
     res->theight = theight;
     res->align = align;
 
+    // Initialize color tracking to -1 to force first-frame configuration
+    res->last_colorspace = -1;
+    res->last_color_range = -1;
+
     res->scale_context = sws_getContext(
         swidth, sheight, sformat,
         twidth, theight, tformat,
@@ -87,6 +95,34 @@ AVFrame* ffw_frame_scaler_scale(FrameScaler* scaler, const AVFrame* src) {
         if (scaler->frame == NULL) {
             return NULL;
         }
+    }
+
+    // Configure color space if it changed from last time
+    if (src->colorspace != scaler->last_colorspace || src->color_range != scaler->last_color_range) {
+        scaler->last_colorspace = src->colorspace;
+        scaler->last_color_range = src->color_range;
+
+        // Map FFmpeg colorspace to sws colorspace
+        int sws_cs = SWS_CS_DEFAULT;
+        switch (src->colorspace) {
+            case AVCOL_SPC_BT709: sws_cs = SWS_CS_ITU709; break;
+            case AVCOL_SPC_BT470BG:
+            case AVCOL_SPC_SMPTE170M: sws_cs = SWS_CS_ITU601; break;
+            case AVCOL_SPC_SMPTE240M: sws_cs = SWS_CS_SMPTE240M; break;
+            case AVCOL_SPC_BT2020_NCL:
+            case AVCOL_SPC_BT2020_CL: sws_cs = SWS_CS_BT2020; break;
+            default: sws_cs = SWS_CS_DEFAULT; break;
+        }
+
+        const int *table = sws_getCoefficients(sws_cs);
+        // AVCOL_RANGE_MPEG = 1 (video range), AVCOL_RANGE_JPEG = 2 (full range)
+        int src_full_range = (src->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+        int dst_full_range = 1;  // Output to full range RGB
+
+        sws_setColorspaceDetails(scaler->scale_context,
+            table, src_full_range,
+            table, dst_full_range,
+            0, 1 << 16, 1 << 16);
     }
 
     AVFrame* dst = scaler->frame;

@@ -221,6 +221,9 @@ AVFrame* ffw_frame_from_hardware(AVFrame* frame) {
         return NULL;
     }
 
+    // Copy frame properties (color info, timestamps, etc.) from source
+    av_frame_copy_props(sw_frame, frame);
+
     return sw_frame;
 }
 
