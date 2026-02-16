@@ -25,7 +25,10 @@ use crate::{
 };
 
 pub use self::{
-    frame::{PixelFormat, VideoFrame, VideoFrameMut},
+    frame::{
+        Chromaticity, ContentLightLevel, HdrMetadata, MasteringDisplayMetadata, PixelFormat,
+        VideoFrame, VideoFrameMut,
+    },
     scaler::{VideoFrameScaler, VideoFrameScalerBuilder},
 };
 

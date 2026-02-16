@@ -18,6 +18,31 @@ use crate::{
 
 use super::pixel::AVPixelFormat;
 
+// C struct for content light level info
+#[repr(C)]
+struct CContentLightLevel {
+    max_cll: u32,
+    max_fall: u32,
+    has_data: c_int,
+}
+
+// C struct for mastering display metadata
+#[repr(C)]
+struct CMasteringDisplayMetadata {
+    display_primaries_r_x: f64,
+    display_primaries_r_y: f64,
+    display_primaries_g_x: f64,
+    display_primaries_g_y: f64,
+    display_primaries_b_x: f64,
+    display_primaries_b_y: f64,
+    white_point_x: f64,
+    white_point_y: f64,
+    min_luminance: f64,
+    max_luminance: f64,
+    has_primaries: c_int,
+    has_luminance: c_int,
+}
+
 extern "C" {
     fn ffw_get_pixel_format_by_name(name: *const c_char) -> c_int;
     fn ffw_pixel_format_is_none(format: c_int) -> c_int;
@@ -50,6 +75,16 @@ extern "C" {
     fn ffw_frame_copy_props(dest: *mut c_void, src: *const c_void) -> c_int;
     fn ffw_frame_clone(frame: *const c_void) -> *mut c_void;
     fn ffw_frame_free(frame: *mut c_void);
+
+    // HDR metadata functions
+    fn ffw_frame_get_content_light_level(
+        frame: *const c_void,
+        out: *mut CContentLightLevel,
+    ) -> c_int;
+    fn ffw_frame_get_mastering_display_metadata(
+        frame: *const c_void,
+        out: *mut CMasteringDisplayMetadata,
+    ) -> c_int;
 }
 
 /// An error indicating an unknown pixel format.
@@ -118,6 +153,98 @@ impl FromStr for PixelFormat {
 /// Get a pixel format with a given name.
 pub fn get_pixel_format(name: &str) -> PixelFormat {
     PixelFormat::from_str(name).unwrap()
+}
+
+/// Content Light Level information (CTA-861.3)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ContentLightLevel {
+    /// Maximum Content Light Level in cd/m² (nits)
+    pub max_cll: u32,
+    /// Maximum Frame Average Light Level in cd/m² (nits)
+    pub max_fall: u32,
+}
+
+/// CIE 1931 xy chromaticity coordinates
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Chromaticity {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Mastering Display Metadata (SMPTE 2086:2014)
+#[derive(Debug, Clone, Copy)]
+pub struct MasteringDisplayMetadata {
+    /// Red primary chromaticity
+    pub red: Chromaticity,
+    /// Green primary chromaticity
+    pub green: Chromaticity,
+    /// Blue primary chromaticity
+    pub blue: Chromaticity,
+    /// White point chromaticity
+    pub white_point: Chromaticity,
+    /// Minimum luminance of the display in cd/m² (nits)
+    pub min_luminance: f64,
+    /// Maximum luminance of the display in cd/m² (nits)
+    pub max_luminance: f64,
+    /// Whether primary chromaticity values are set
+    pub has_primaries: bool,
+    /// Whether luminance values are set
+    pub has_luminance: bool,
+}
+
+impl Default for MasteringDisplayMetadata {
+    fn default() -> Self {
+        Self {
+            red: Chromaticity::default(),
+            green: Chromaticity::default(),
+            blue: Chromaticity::default(),
+            white_point: Chromaticity::default(),
+            min_luminance: 0.0,
+            max_luminance: 0.0,
+            has_primaries: false,
+            has_luminance: false,
+        }
+    }
+}
+
+/// HDR Metadata containing content light level and mastering display information
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HdrMetadata {
+    /// Content Light Level (MaxCLL/MaxFALL) - may be None if not present
+    pub content_light_level: Option<ContentLightLevel>,
+    /// Mastering Display Metadata - may be None if not present
+    pub mastering_display: Option<MasteringDisplayMetadata>,
+}
+
+impl HdrMetadata {
+    /// Returns the maximum content light level in nits, or None if not available
+    pub fn max_cll(&self) -> Option<u32> {
+        self.content_light_level.map(|cll| cll.max_cll)
+    }
+
+    /// Returns the maximum frame average light level in nits, or None if not available
+    pub fn max_fall(&self) -> Option<u32> {
+        self.content_light_level.map(|cll| cll.max_fall)
+    }
+
+    /// Returns the mastering display max luminance in nits, or None if not available
+    pub fn mastering_max_luminance(&self) -> Option<f64> {
+        self.mastering_display
+            .filter(|md| md.has_luminance)
+            .map(|md| md.max_luminance)
+    }
+
+    /// Returns the mastering display min luminance in nits, or None if not available
+    pub fn mastering_min_luminance(&self) -> Option<f64> {
+        self.mastering_display
+            .filter(|md| md.has_luminance)
+            .map(|md| md.min_luminance)
+    }
+
+    /// Check if any HDR metadata is present
+    pub fn has_any(&self) -> bool {
+        self.content_light_level.is_some() || self.mastering_display.is_some()
+    }
 }
 
 /// Picture plane (i.e. a planar array of pixel components).
@@ -580,6 +707,69 @@ impl VideoFrame {
 
     pub fn chroma_location(&self) -> u32 {
         unsafe { ffw_frame_get_chroma_location(self.ptr) as _ }
+    }
+
+    /// Get HDR metadata (content light level and mastering display info) from frame side data.
+    /// Returns HdrMetadata with None fields if no HDR side data is present.
+    pub fn hdr_metadata(&self) -> HdrMetadata {
+        let mut result = HdrMetadata::default();
+
+        // Get content light level
+        let mut cll = CContentLightLevel {
+            max_cll: 0,
+            max_fall: 0,
+            has_data: 0,
+        };
+        let ret = unsafe { ffw_frame_get_content_light_level(self.ptr, &mut cll) };
+        if ret == 0 && cll.has_data != 0 {
+            result.content_light_level = Some(ContentLightLevel {
+                max_cll: cll.max_cll,
+                max_fall: cll.max_fall,
+            });
+        }
+
+        // Get mastering display metadata
+        let mut mdm = CMasteringDisplayMetadata {
+            display_primaries_r_x: 0.0,
+            display_primaries_r_y: 0.0,
+            display_primaries_g_x: 0.0,
+            display_primaries_g_y: 0.0,
+            display_primaries_b_x: 0.0,
+            display_primaries_b_y: 0.0,
+            white_point_x: 0.0,
+            white_point_y: 0.0,
+            min_luminance: 0.0,
+            max_luminance: 0.0,
+            has_primaries: 0,
+            has_luminance: 0,
+        };
+        let ret = unsafe { ffw_frame_get_mastering_display_metadata(self.ptr, &mut mdm) };
+        if ret == 0 && (mdm.has_primaries != 0 || mdm.has_luminance != 0) {
+            result.mastering_display = Some(MasteringDisplayMetadata {
+                red: Chromaticity {
+                    x: mdm.display_primaries_r_x,
+                    y: mdm.display_primaries_r_y,
+                },
+                green: Chromaticity {
+                    x: mdm.display_primaries_g_x,
+                    y: mdm.display_primaries_g_y,
+                },
+                blue: Chromaticity {
+                    x: mdm.display_primaries_b_x,
+                    y: mdm.display_primaries_b_y,
+                },
+                white_point: Chromaticity {
+                    x: mdm.white_point_x,
+                    y: mdm.white_point_y,
+                },
+                min_luminance: mdm.min_luminance,
+                max_luminance: mdm.max_luminance,
+                has_primaries: mdm.has_primaries != 0,
+                has_luminance: mdm.has_luminance != 0,
+            });
+        }
+
+        result
     }
 
     pub fn num_planes(&self) -> usize {

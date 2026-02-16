@@ -6,6 +6,7 @@
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/mastering_display_metadata.h>
 
 int ffw_channel_layout_get_default(AVChannelLayout* *layout, uint32_t channels) {
     AVChannelLayout* res;
@@ -329,4 +330,99 @@ int ffw_frame_get_repeat_pict(AVFrame *frame) {
 
 int ffw_frame_is_hardware(AVFrame *frame) {
     return frame->hw_frames_ctx != NULL || frame->data[3] != NULL;
+}
+
+// HDR Metadata extraction
+
+// Structure to hold content light level info
+typedef struct {
+    uint32_t max_cll;   // Maximum Content Light Level (cd/m^2)
+    uint32_t max_fall;  // Maximum Frame Average Light Level (cd/m^2)
+    int has_data;       // Whether data was found
+} ContentLightLevel;
+
+// Structure to hold mastering display metadata
+typedef struct {
+    // Display primaries (RGB) as doubles
+    double display_primaries_r_x;
+    double display_primaries_r_y;
+    double display_primaries_g_x;
+    double display_primaries_g_y;
+    double display_primaries_b_x;
+    double display_primaries_b_y;
+    // White point
+    double white_point_x;
+    double white_point_y;
+    // Luminance (cd/m^2 aka nits)
+    double min_luminance;
+    double max_luminance;
+    // Flags
+    int has_primaries;
+    int has_luminance;
+} MasteringDisplayMetadata;
+
+// Helper to convert AVRational to double
+static double rational_to_double(AVRational r) {
+    if (r.den == 0) return 0.0;
+    return (double)r.num / (double)r.den;
+}
+
+// Get content light level from frame side data
+int ffw_frame_get_content_light_level(const AVFrame* frame, ContentLightLevel* out) {
+    if (!frame || !out) {
+        return -1;
+    }
+
+    AVFrameSideData* sd = av_frame_get_side_data(frame, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+    if (!sd || !sd->data) {
+        out->has_data = 0;
+        out->max_cll = 0;
+        out->max_fall = 0;
+        return 0;
+    }
+
+    AVContentLightMetadata* cll = (AVContentLightMetadata*)sd->data;
+    out->max_cll = cll->MaxCLL;
+    out->max_fall = cll->MaxFALL;
+    out->has_data = 1;
+
+    return 0;
+}
+
+// Get mastering display metadata from frame side data
+int ffw_frame_get_mastering_display_metadata(const AVFrame* frame, MasteringDisplayMetadata* out) {
+    if (!frame || !out) {
+        return -1;
+    }
+
+    AVFrameSideData* sd = av_frame_get_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+    if (!sd || !sd->data) {
+        out->has_primaries = 0;
+        out->has_luminance = 0;
+        return 0;
+    }
+
+    AVMasteringDisplayMetadata* mdm = (AVMasteringDisplayMetadata*)sd->data;
+
+    // Copy primaries (r, g, b order)
+    out->display_primaries_r_x = rational_to_double(mdm->display_primaries[0][0]);
+    out->display_primaries_r_y = rational_to_double(mdm->display_primaries[0][1]);
+    out->display_primaries_g_x = rational_to_double(mdm->display_primaries[1][0]);
+    out->display_primaries_g_y = rational_to_double(mdm->display_primaries[1][1]);
+    out->display_primaries_b_x = rational_to_double(mdm->display_primaries[2][0]);
+    out->display_primaries_b_y = rational_to_double(mdm->display_primaries[2][1]);
+
+    // White point
+    out->white_point_x = rational_to_double(mdm->white_point[0]);
+    out->white_point_y = rational_to_double(mdm->white_point[1]);
+
+    // Luminance
+    out->min_luminance = rational_to_double(mdm->min_luminance);
+    out->max_luminance = rational_to_double(mdm->max_luminance);
+
+    // Flags
+    out->has_primaries = mdm->has_primaries;
+    out->has_luminance = mdm->has_luminance;
+
+    return 0;
 }
