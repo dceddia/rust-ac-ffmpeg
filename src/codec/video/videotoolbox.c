@@ -142,6 +142,23 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_context = callback_context;
     decoder->generation = 0;
 
+    // Determine codec type and extradata atom name based on codec_id
+    CMVideoCodecType codecType;
+    const char *extradataAtomName;
+
+    switch (params->codec_id) {
+        case AV_CODEC_ID_HEVC:
+            // kCMVideoCodecType_HEVC = 'hvc1' (available macOS 10.13+)
+            codecType = 'hvc1';
+            extradataAtomName = "hvcC";
+            break;
+        case AV_CODEC_ID_H264:
+        default:
+            codecType = kCMVideoCodecType_H264;
+            extradataAtomName = "avcC";
+            break;
+    }
+
     CFMutableDictionaryRef par = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef extensions = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -149,8 +166,10 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     /* CVPixelAspectRatio dict */
     dict_set_i32(par, CFSTR ("HorizontalSpacing"), 0);
     dict_set_i32(par, CFSTR ("VerticalSpacing"), 0);
-    /* SampleDescriptionExtensionAtoms dict */
-    dict_set_data(atoms, CFSTR ("avcC"), (uint8_t *)extradata, extradata_size);
+    /* SampleDescriptionExtensionAtoms dict - use correct atom name for codec */
+    CFStringRef atomKey = CFStringCreateWithCString(NULL, extradataAtomName, kCFStringEncodingASCII);
+    dict_set_data(atoms, atomKey, (uint8_t *)extradata, extradata_size);
+    CFRelease(atomKey);
     /* Extensions dict */
     dict_set_string(extensions, CFSTR ("CVImageBufferChromaLocationBottomField"), "left");
     dict_set_string(extensions, CFSTR ("CVImageBufferChromaLocationTopField"), "left");
@@ -158,7 +177,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     dict_set_object(extensions, CFSTR ("CVPixelAspectRatio"), (CFTypeRef *) par);
     dict_set_object(extensions, CFSTR ("SampleDescriptionExtensionAtoms"), (CFTypeRef *) atoms);
 
-    status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault, kCMVideoCodecType_H264, width, height, extensions, &(decoder->formatDecsription));
+    status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault, codecType, width, height, extensions, &(decoder->formatDecsription));
 
     CFRelease(extensions);
     CFRelease(atoms);
