@@ -85,6 +85,9 @@ extern "C" {
         frame: *const c_void,
         out: *mut CMasteringDisplayMetadata,
     ) -> c_int;
+
+    // Sample aspect ratio
+    fn ffw_frame_get_sample_aspect_ratio(frame: *const c_void, num: *mut c_int, den: *mut c_int);
 }
 
 /// An error indicating an unknown pixel format.
@@ -214,6 +217,52 @@ pub struct HdrMetadata {
     pub content_light_level: Option<ContentLightLevel>,
     /// Mastering Display Metadata - may be None if not present
     pub mastering_display: Option<MasteringDisplayMetadata>,
+}
+
+/// Sample Aspect Ratio (SAR) - the ratio of pixel width to pixel height.
+///
+/// For anamorphic video, SAR is not 1:1. The Display Aspect Ratio (DAR) is:
+/// DAR = SAR × (coded_width / coded_height)
+///
+/// For example, a 720x480 frame with SAR 8:9 has DAR = (8/9) × (720/480) = 4:3
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SampleAspectRatio {
+    /// Numerator of the aspect ratio
+    pub num: i32,
+    /// Denominator of the aspect ratio
+    pub den: i32,
+}
+
+impl SampleAspectRatio {
+    /// Create a new SampleAspectRatio with the given numerator and denominator.
+    pub fn new(num: i32, den: i32) -> Self {
+        Self { num, den }
+    }
+
+    /// Returns true if the SAR is 1:1 (square pixels).
+    pub fn is_square(&self) -> bool {
+        self.num == self.den || (self.num == 0 && self.den == 0) || self.den == 0
+    }
+
+    /// Returns the SAR as a floating point ratio.
+    /// Returns 1.0 for square pixels or invalid values.
+    pub fn as_f64(&self) -> f64 {
+        if self.den == 0 || self.num == 0 {
+            1.0
+        } else {
+            self.num as f64 / self.den as f64
+        }
+    }
+
+    /// Returns the SAR as a pair of f32 values (num, den) suitable for shaders.
+    /// Returns (1.0, 1.0) for square pixels or invalid values.
+    pub fn as_f32_pair(&self) -> (f32, f32) {
+        if self.den == 0 || self.num == 0 {
+            (1.0, 1.0)
+        } else {
+            (self.num as f32, self.den as f32)
+        }
+    }
 }
 
 impl HdrMetadata {
@@ -707,6 +756,21 @@ impl VideoFrame {
 
     pub fn chroma_location(&self) -> u32 {
         unsafe { ffw_frame_get_chroma_location(self.ptr) as _ }
+    }
+
+    /// Get the sample aspect ratio (SAR) of the frame.
+    ///
+    /// SAR describes the ratio of pixel width to pixel height. A SAR of 1:1 means square pixels.
+    /// For anamorphic video (like DVD or some broadcast content), SAR is not 1:1.
+    ///
+    /// The Display Aspect Ratio (DAR) is: DAR = SAR × (coded_width / coded_height)
+    pub fn sample_aspect_ratio(&self) -> SampleAspectRatio {
+        let mut num: c_int = 0;
+        let mut den: c_int = 0;
+        unsafe {
+            ffw_frame_get_sample_aspect_ratio(self.ptr, &mut num, &mut den);
+        }
+        SampleAspectRatio { num, den }
     }
 
     /// Get HDR metadata (content light level and mastering display info) from frame side data.

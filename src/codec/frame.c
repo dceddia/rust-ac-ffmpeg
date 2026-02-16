@@ -332,6 +332,25 @@ int ffw_frame_is_hardware(AVFrame *frame) {
     return frame->hw_frames_ctx != NULL || frame->data[3] != NULL;
 }
 
+// Get sample aspect ratio from frame
+void ffw_frame_get_sample_aspect_ratio(const AVFrame* frame, int* num, int* den) {
+    if (!frame || !num || !den) {
+        if (num) *num = 1;
+        if (den) *den = 1;
+        return;
+    }
+
+    AVRational sar = frame->sample_aspect_ratio;
+    // Default to 1:1 if unspecified (0:0 or 0:1)
+    if (sar.num == 0 || sar.den == 0) {
+        *num = 1;
+        *den = 1;
+    } else {
+        *num = sar.num;
+        *den = sar.den;
+    }
+}
+
 // HDR Metadata extraction
 
 // Structure to hold content light level info
