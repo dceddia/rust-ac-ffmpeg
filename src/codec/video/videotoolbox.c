@@ -169,9 +169,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
             break;
     }
 
-    // Diagnostic: Log codec type being used for decoder creation
-    printf("VT: Creating decoder for codec_id=%d, using codecType='%.4s' (%d)\n",
-           params->codec_id, (char*)&codecType, codecType);
 
     CFMutableDictionaryRef par = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
@@ -225,7 +222,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
         printf("VT: Decompression session FAILED with status %d\n", (int)status);
         return NULL;
     }
-    printf("VT: Decompression session created successfully\n");
 
     // Set up hardware device and frames context for av_hwframe_transfer_data support
     decoder->hw_device_ref = NULL;
@@ -358,9 +354,6 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
     VTDecodeInfoFlags flagOut = 0;
 
-    // Diagnostic: Log packet info before decode
-    printf("VT: Decoding packet pts=%lld size=%d\n", (long long)packet->pts, packet->size);
-
     status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
     switch (status) {
         case noErr:
@@ -429,8 +422,6 @@ static void didDecompress(void *decompressionOutputRefCon,
         decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
         return;
     }
-
-    printf("VT: didDecompress success, pixelBuffer=%p\n", (void*)pixelBuffer);
 
     // Reset error tracking on successful decode
     decoder->consecutive_errors = 0;
