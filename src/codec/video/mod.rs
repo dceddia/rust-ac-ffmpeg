@@ -9,6 +9,7 @@ pub mod scaler;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 
+use log::warn;
 use std::{
     ffi::{CStr, CString},
     os::raw::c_void,
@@ -232,8 +233,16 @@ impl VideoDecoderBuilder {
             #[cfg(target_os = "macos")]
             {
                 let params = self.codec_parameters();
-                let decoder = videotoolbox::VTDecoder::new(&params, self.time_base)?;
-                self.vt_decoder = Some(decoder);
+                match videotoolbox::VTDecoder::new(&params, self.time_base) {
+                    Ok(decoder) => self.vt_decoder = Some(decoder),
+                    Err(e) => {
+                        warn!(
+                            "Hardware decoder creation failed: {}, falling back to software",
+                            e
+                        );
+                        // vt_decoder remains None, will use software decoder
+                    }
+                }
             }
         }
 
@@ -351,6 +360,21 @@ impl VideoDecoder {
 
     pub fn clear_reorder_buffer(&mut self) {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
+    }
+
+    /// Returns true if hardware decode has failed and software fallback is needed.
+    /// Always returns false for software decoders.
+    #[cfg(target_os = "macos")]
+    pub fn hw_decode_has_failed(&self) -> bool {
+        if let Some(vt_decoder) = &self.vt_decoder {
+            return vt_decoder.has_failed();
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn hw_decode_has_failed(&self) -> bool {
+        false
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
