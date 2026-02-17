@@ -32,8 +32,11 @@ static void vthw_buffer_release(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-// Rust callback function type that receives an AVFrame
-typedef void (*RustFrameCallback)(void *context, AVFrame *frame);
+// Rust callback function type that receives an AVFrame (or error info)
+// frame: the decoded frame, or NULL on error/skip
+// status: 0 on success, OSStatus error code on failure
+// pts: presentation timestamp of the frame/error
+typedef void (*RustFrameCallback)(void *context, AVFrame *frame, int32_t status, int64_t pts);
 
 static void didDecompress(
     void *decompressionOutputRefCon,
@@ -54,6 +57,10 @@ typedef struct VTDecoder {
     uint64_t generation;  // Incremented on flush/seek to filter stale async frames
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
+    // Error tracking for fallback detection
+    int consecutive_errors;       // Count of consecutive decode errors
+    int total_frames_decoded;     // Total successful frames
+    int decode_failed;            // Set to 1 when we've determined HW decode won't work
 } VTDecoder;
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
@@ -141,6 +148,9 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
     decoder->generation = 0;
+    decoder->consecutive_errors = 0;
+    decoder->total_frames_decoded = 0;
+    decoder->decode_failed = 0;
 
     // Determine codec type and extradata atom name based on codec_id
     CMVideoCodecType codecType;
@@ -158,6 +168,10 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
             extradataAtomName = "avcC";
             break;
     }
+
+    // Diagnostic: Log codec type being used for decoder creation
+    printf("VT: Creating decoder for codec_id=%d, using codecType='%.4s' (%d)\n",
+           params->codec_id, (char*)&codecType, codecType);
 
     CFMutableDictionaryRef par = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
@@ -208,9 +222,10 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     CFRelease(decoderSpec);
     CFRelease(destinationPixelBufferAttributes);
     if (status != noErr) {
-        printf("Error: Creating decompression session failed with code %d\n", status);
+        printf("VT: Decompression session FAILED with status %d\n", (int)status);
         return NULL;
     }
+    printf("VT: Decompression session created successfully\n");
 
     // Set up hardware device and frames context for av_hwframe_transfer_data support
     decoder->hw_device_ref = NULL;
@@ -342,18 +357,22 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     }
 
     VTDecodeInfoFlags flagOut = 0;
+
+    // Diagnostic: Log packet info before decode
+    printf("VT: Decoding packet pts=%lld size=%d\n", (long long)packet->pts, packet->size);
+
     status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
     switch (status) {
         case noErr:
             break;
         case kVTInvalidSessionErr:
-            printf("Error: Invalid session. Reset decoder.\n");
+            printf("VT: DecodeFrame FAILED status=%d (Invalid session)\n", (int)status);
             break;
         case kVTVideoDecoderBadDataErr:
-            printf("Error: decode failed. status=%d (Bad data)\n", status);
+            printf("VT: DecodeFrame FAILED status=%d (Bad data)\n", (int)status);
             break;
         default:
-            printf("Error: decode failed. status=%d\n", status);
+            printf("VT: DecodeFrame FAILED status=%d\n", (int)status);
             break;
     }
 
@@ -369,7 +388,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
 static void didDecompress(void *decompressionOutputRefCon,
                           void *sourceFrameRefCon,
-                          OSStatus status __attribute__((unused)),
+                          OSStatus status,
                           VTDecodeInfoFlags infoFlags __attribute__((unused)),
                           CVImageBufferRef pixelBuffer,
                           CMTime presentationTimeStamp,
@@ -380,17 +399,42 @@ static void didDecompress(void *decompressionOutputRefCon,
         return;
     }
 
+    int64_t pts = presentationTimeStamp.value;
+
+    // Check for decode errors
+    if (status != noErr) {
+        printf("VT: didDecompress error status=%d pts=%lld\n", (int)status, (long long)pts);
+        decoder->consecutive_errors++;
+        // If we've never successfully decoded a frame and hit 10+ errors, mark as failed
+        if (decoder->total_frames_decoded == 0 && decoder->consecutive_errors >= 10) {
+            if (!decoder->decode_failed) {
+                printf("VT: Hardware decode appears unsupported (10 consecutive errors, 0 frames)\n");
+                decoder->decode_failed = 1;
+            }
+        }
+        // Send error to Rust
+        decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
+        return;
+    }
+
     // Filter out stale frames from before a seek/flush
     uint64_t frame_generation = (uint64_t)(uintptr_t)sourceFrameRefCon;
     if (frame_generation != decoder->generation) {
+        // Don't send stale frames or errors
         return;
     }
 
     // Call the Rust callback with NULL if pixelBuffer is NULL (for DoNotDisplay frames)
     if (pixelBuffer == NULL) {
-        decoder->rust_callback(decoder->rust_context, NULL);
+        decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
         return;
     }
+
+    printf("VT: didDecompress success, pixelBuffer=%p\n", (void*)pixelBuffer);
+
+    // Reset error tracking on successful decode
+    decoder->consecutive_errors = 0;
+    decoder->total_frames_decoded++;
 
     // Create an AVFrame and populate it with the decoded data
     AVFrame *frame = av_frame_alloc();
@@ -450,8 +494,8 @@ static void didDecompress(void *decompressionOutputRefCon,
     frame->time_base.num = 1;
     frame->time_base.den = presentationTimeStamp.timescale;
 
-    // Call the Rust callback
-    decoder->rust_callback(decoder->rust_context, frame);
+    // Call the Rust callback with success
+    decoder->rust_callback(decoder->rust_context, frame, 0, pts);
 
     // Note: The Rust side is responsible for calling av_frame_free when done
 }
@@ -463,4 +507,20 @@ void vt_decoder_flush(VTDecoder *decoder) {
 
     decoder->generation++;
     VTDecompressionSessionFinishDelayedFrames(decoder->decompressSession);
+}
+
+// Returns 1 if hardware decode has failed and fallback is needed
+int vt_decoder_has_failed(VTDecoder *decoder) {
+    if (!decoder) {
+        return 0;
+    }
+    return decoder->decode_failed;
+}
+
+// Returns the number of consecutive decode errors
+int vt_decoder_error_count(VTDecoder *decoder) {
+    if (!decoder) {
+        return 0;
+    }
+    return decoder->consecutive_errors;
 }

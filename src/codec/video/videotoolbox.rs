@@ -1,9 +1,10 @@
 use std::ffi::c_void;
 use std::sync::mpsc::TryRecvError;
-use std::time::Instant;
+
+use log::{debug, trace, warn};
 
 use crate::codec::CodecError;
-use crate::packet::{Packet, PacketMut};
+use crate::packet::Packet;
 use crate::time::TimeBase;
 use crate::{codec::VideoCodecParameters, Error};
 
@@ -11,18 +12,29 @@ pub struct DecodedFrame {
     pub(crate) av_frame: *mut c_void, // AVFrame pointer from C
 }
 
+/// Result of an async decode operation from VideoToolbox
+pub enum DecodeResult {
+    /// Successfully decoded frame
+    Frame(DecodedFrame),
+    /// Decode error (HW couldn't decode this frame)
+    Error { status: i32, pts: i64 },
+    /// Frame was marked DoNotDisplay (not an error, just no frame)
+    Skipped { pts: i64 },
+}
+
 pub struct VTDecoder {
     vt_decoder_ptr: *mut c_void,
     #[allow(dead_code)]
-    time_base: TimeBase, // Kept for potential future use
+    time_base: TimeBase,
     #[allow(dead_code)]
-    frame_tx: std::sync::mpsc::Sender<DecodedFrame>, // Kept for potential future use
-    frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
+    frame_tx: std::sync::mpsc::Sender<DecodeResult>,
+    frame_rx: std::sync::mpsc::Receiver<DecodeResult>,
     // Store the raw pointer to the boxed sender so we can clean it up
-    sender_ptr: *mut std::sync::mpsc::Sender<DecodedFrame>,
+    sender_ptr: *mut std::sync::mpsc::Sender<DecodeResult>,
 }
 
-type RustFrameCallback = unsafe extern "C" fn(context: *mut c_void, frame: *mut c_void);
+type RustFrameCallback =
+    unsafe extern "C" fn(context: *mut c_void, frame: *mut c_void, status: i32, pts: i64);
 
 extern "C" {
     fn ffw_frame_free(frame: *mut c_void);
@@ -42,20 +54,34 @@ extern "C" {
     ) -> i32;
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
+    pub(crate) fn vt_decoder_has_failed(decoder: *mut c_void) -> i32;
+    pub(crate) fn vt_decoder_error_count(decoder: *mut c_void) -> i32;
 }
 
 // This is the Rust callback that will be called from C
-unsafe extern "C" fn rust_frame_callback(context: *mut c_void, frame: *mut c_void) {
-    // If frame is NULL, it means the frame was marked DoNotDisplay
-    if frame.is_null() {
+unsafe extern "C" fn rust_frame_callback(
+    context: *mut c_void,
+    frame: *mut c_void,
+    status: i32,
+    pts: i64,
+) {
+    let sender = &*(context as *const std::sync::mpsc::Sender<DecodeResult>);
+
+    // Check for decode error
+    if status != 0 {
+        let _ = sender.send(DecodeResult::Error { status, pts });
         return;
     }
 
-    let decoded_frame = DecodedFrame { av_frame: frame };
+    // NULL frame with success status means DoNotDisplay
+    if frame.is_null() {
+        let _ = sender.send(DecodeResult::Skipped { pts });
+        return;
+    }
 
-    // Get the sender from the context
-    let sender = &*(context as *const std::sync::mpsc::Sender<DecodedFrame>);
-    let _ = sender.send(decoded_frame);
+    // Success - send the frame
+    let decoded_frame = DecodedFrame { av_frame: frame };
+    let _ = sender.send(DecodeResult::Frame(decoded_frame));
 }
 
 impl Drop for DecodedFrame {
@@ -104,9 +130,11 @@ impl VTDecoder {
             unsafe {
                 drop(Box::from_raw(sender_ptr));
             }
+            warn!("VideoToolbox decoder creation failed");
             return Err(Error::new("Failed to create VideoToolbox decoder"));
         }
 
+        debug!("VideoToolbox decoder created successfully");
         Ok(VTDecoder {
             time_base,
             frame_tx,
@@ -130,6 +158,7 @@ impl VTDecoder {
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), CodecError> {
         let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 1) };
         if ret < 0 {
+            warn!("VideoToolbox push_with_reset returned error {}", ret);
             return Err(CodecError::from_raw_error_code(ret));
         }
         Ok(())
@@ -151,6 +180,7 @@ impl VTDecoder {
     fn decode_frame(&mut self, packet: Packet) -> Result<(), CodecError> {
         let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 0) };
         if ret < 0 {
+            warn!("VideoToolbox decode_frame returned error {}", ret);
             return Err(CodecError::from_raw_error_code(ret));
         }
         Ok(())
@@ -158,20 +188,55 @@ impl VTDecoder {
 
     pub fn take_frame(&mut self) -> Result<Option<DecodedFrame>, Error> {
         match self.frame_rx.try_recv() {
-            Ok(decoded_frame) => Ok(Some(decoded_frame)),
+            Ok(DecodeResult::Frame(decoded_frame)) => {
+                trace!("VideoToolbox: got frame from channel");
+                Ok(Some(decoded_frame))
+            }
+            Ok(DecodeResult::Error { status, pts }) => {
+                warn!(
+                    "VideoToolbox decode error: status={} pts={}",
+                    status, pts
+                );
+                Err(Error::new(format!(
+                    "Hardware decode error: status={} pts={}",
+                    status, pts
+                )))
+            }
+            Ok(DecodeResult::Skipped { pts: _ }) => {
+                // DoNotDisplay frame - not an error, just no frame to return
+                Ok(None)
+            }
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(Error::new("Receiver disconnected")),
         }
     }
 
+    /// Returns true if hardware decode has failed and fallback to software is needed
+    pub fn has_failed(&self) -> bool {
+        unsafe { vt_decoder_has_failed(self.vt_decoder_ptr) != 0 }
+    }
+
+    /// Returns the number of consecutive decode errors
+    pub fn error_count(&self) -> i32 {
+        unsafe { vt_decoder_error_count(self.vt_decoder_ptr) }
+    }
+
     pub fn flush_buffers(&mut self) {
-        println!("flushing decoder (finish + wait for delayed frames");
+        debug!("VideoToolbox: flushing decoder");
         let _ = self.try_flush();
-        let mut i = 0;
-        while self.frame_rx.try_recv().is_ok() {
-            i += 1
+        let mut flushed_frames = 0;
+        let mut flushed_errors = 0;
+        while let Ok(result) = self.frame_rx.try_recv() {
+            match result {
+                DecodeResult::Frame(_) => flushed_frames += 1,
+                DecodeResult::Error { .. } => flushed_errors += 1,
+                DecodeResult::Skipped { .. } => {}
+            }
         }
-        println!("flushed {} frames", i);
+        debug!(
+            "VideoToolbox: flushed {} frames, {} errors",
+            flushed_frames, flushed_errors
+        );
     }
 }
 
