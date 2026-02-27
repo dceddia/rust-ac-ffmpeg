@@ -374,8 +374,13 @@ impl VideoDecoder {
             let params = self.codec_parameters();
 
             // Create a new decoder without hardware acceleration
-            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params)
-                .map(|b| b.time_base(self.time_base).rotation(self.rotation).build());
+            // Use all CPU cores for software decoding to keep up with real-time playback
+            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params).map(|b| {
+                b.time_base(self.time_base)
+                    .rotation(self.rotation)
+                    .with_thread_count(0)
+                    .build()
+            });
 
             match new_decoder {
                 Ok(Ok(mut decoder)) => {
