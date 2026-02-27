@@ -57,10 +57,6 @@ typedef struct VTDecoder {
     uint64_t generation;  // Incremented on flush/seek to filter stale async frames
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
-    // Error tracking for fallback detection
-    int consecutive_errors;       // Count of consecutive decode errors
-    int total_frames_decoded;     // Total successful frames
-    int decode_failed;            // Set to 1 when we've determined HW decode won't work
 } VTDecoder;
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
@@ -148,9 +144,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
     decoder->generation = 0;
-    decoder->consecutive_errors = 0;
-    decoder->total_frames_decoded = 0;
-    decoder->decode_failed = 0;
 
     // Determine codec type and extradata atom name based on codec_id
     CMVideoCodecType codecType;
@@ -394,18 +387,9 @@ static void didDecompress(void *decompressionOutputRefCon,
 
     int64_t pts = presentationTimeStamp.value;
 
-    // Check for decode errors
+    // Check for decode errors - send to Rust for handling
     if (status != noErr) {
         printf("VT: didDecompress error status=%d pts=%lld\n", (int)status, (long long)pts);
-        decoder->consecutive_errors++;
-        // If we've never successfully decoded a frame and hit 10+ errors, mark as failed
-        if (decoder->total_frames_decoded == 0 && decoder->consecutive_errors >= 10) {
-            if (!decoder->decode_failed) {
-                printf("VT: Hardware decode appears unsupported (10 consecutive errors, 0 frames)\n");
-                decoder->decode_failed = 1;
-            }
-        }
-        // Send error to Rust
         decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
         return;
     }
@@ -422,10 +406,6 @@ static void didDecompress(void *decompressionOutputRefCon,
         decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
         return;
     }
-
-    // Reset error tracking on successful decode
-    decoder->consecutive_errors = 0;
-    decoder->total_frames_decoded++;
 
     // Create an AVFrame and populate it with the decoded data
     AVFrame *frame = av_frame_alloc();
@@ -498,20 +478,4 @@ void vt_decoder_flush(VTDecoder *decoder) {
 
     decoder->generation++;
     VTDecompressionSessionFinishDelayedFrames(decoder->decompressSession);
-}
-
-// Returns 1 if hardware decode has failed and fallback is needed
-int vt_decoder_has_failed(VTDecoder *decoder) {
-    if (!decoder) {
-        return 0;
-    }
-    return decoder->decode_failed;
-}
-
-// Returns the number of consecutive decode errors
-int vt_decoder_error_count(VTDecoder *decoder) {
-    if (!decoder) {
-        return 0;
-    }
-    return decoder->consecutive_errors;
 }

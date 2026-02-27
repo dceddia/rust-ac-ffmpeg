@@ -54,8 +54,6 @@ extern "C" {
     ) -> i32;
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
-    pub(crate) fn vt_decoder_has_failed(decoder: *mut c_void) -> i32;
-    pub(crate) fn vt_decoder_error_count(decoder: *mut c_void) -> i32;
 }
 
 // This is the Rust callback that will be called from C
@@ -209,16 +207,6 @@ impl VTDecoder {
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(Error::new("Receiver disconnected")),
         }
-    }
-
-    /// Returns true if hardware decode has failed and fallback to software is needed
-    pub fn has_failed(&self) -> bool {
-        unsafe { vt_decoder_has_failed(self.vt_decoder_ptr) != 0 }
-    }
-
-    /// Returns the number of consecutive decode errors
-    pub fn error_count(&self) -> i32 {
-        unsafe { vt_decoder_error_count(self.vt_decoder_ptr) }
     }
 
     pub fn flush_buffers(&mut self) {

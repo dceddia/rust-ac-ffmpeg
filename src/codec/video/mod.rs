@@ -362,19 +362,47 @@ impl VideoDecoder {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
     }
 
-    /// Returns true if hardware decode has failed and software fallback is needed.
-    /// Always returns false for software decoders.
+    /// Disable hardware decoding and fall back to software decoder.
+    /// This recreates the underlying FFmpeg decoder without hardware acceleration.
+    /// This is a no-op if already using software decoding.
     #[cfg(target_os = "macos")]
-    pub fn hw_decode_has_failed(&self) -> bool {
-        if let Some(vt_decoder) = &self.vt_decoder {
-            return vt_decoder.has_failed();
+    pub fn fallback_to_software(&mut self) {
+        if self.vt_decoder.take().is_some() {
+            warn!("Falling back to software decode");
+
+            // Get codec parameters from the current decoder
+            let params = self.codec_parameters();
+
+            // Create a new decoder without hardware acceleration
+            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params)
+                .map(|b| b.time_base(self.time_base).rotation(self.rotation).build());
+
+            match new_decoder {
+                Ok(Ok(mut decoder)) => {
+                    // Free the old decoder
+                    unsafe { super::ffw_decoder_free(self.ptr) };
+                    // Replace with the new software-only decoder
+                    self.ptr = decoder.ptr;
+                    self.reorder_buffer = decoder.reorder_buffer.take();
+                    // Prevent the new decoder from being dropped (we took ownership of ptr)
+                    decoder.ptr = std::ptr::null_mut();
+                    // decoder will be dropped here but ptr is null so ffw_decoder_free is safe
+                }
+                Ok(Err(e)) => {
+                    warn!("Failed to create software decoder: {}", e);
+                }
+                Err(e) => {
+                    warn!("Failed to create software decoder: {}", e);
+                }
+            }
         }
-        false
     }
 
+    /// Disable hardware decoding and fall back to software decoder.
+    /// This is a no-op on non-macOS platforms.
     #[cfg(not(target_os = "macos"))]
-    pub fn hw_decode_has_failed(&self) -> bool {
-        false
+    pub fn fallback_to_software(&mut self) {
+        // No-op on non-macOS
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
