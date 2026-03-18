@@ -57,6 +57,7 @@ typedef struct VTDecoder {
     uint64_t generation;  // Incremented on flush/seek to filter stale async frames
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
+    OSType output_pixel_format;   // NV12 (8-bit) or P010 (10-bit)
 } VTDecoder;
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
@@ -145,6 +146,13 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_context = callback_context;
     decoder->generation = 0;
 
+    // Choose output pixel format based on bit depth
+    bool is_10bit = params->bits_per_raw_sample > 8
+                 || params->profile == FF_PROFILE_HEVC_MAIN_10;
+    decoder->output_pixel_format = is_10bit
+        ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+        : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+
     // Determine codec type and extradata atom name based on codec_id
     CMVideoCodecType codecType;
     const char *extradataAtomName;
@@ -196,7 +204,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     VTDecompressionOutputCallbackRecord outputCallback;
 
     destinationPixelBufferAttributes = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferPixelFormatTypeKey, decoder->output_pixel_format);
     dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferWidthKey, width);
     dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferHeightKey, height);
     dict_set_boolean(destinationPixelBufferAttributes, kCVPixelBufferMetalCompatibilityKey, true);
@@ -238,7 +246,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
 
     AVHWFramesContext *frames_ctx = (AVHWFramesContext *)decoder->hw_frames_ref->data;
     frames_ctx->format = AV_PIX_FMT_VIDEOTOOLBOX;
-    frames_ctx->sw_format = AV_PIX_FMT_NV12;  // VideoToolbox outputs NV12
+    frames_ctx->sw_format = is_10bit ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
     frames_ctx->width = width;
     frames_ctx->height = height;
 
