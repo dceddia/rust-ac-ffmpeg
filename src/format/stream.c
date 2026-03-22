@@ -84,6 +84,11 @@ err:
     return NULL;
 }
 
+void ffw_stream_set_time_base(AVStream* stream, uint32_t num, uint32_t den) {
+    stream->time_base.num = num;
+    stream->time_base.den = den;
+}
+
 int ffw_stream_set_metadata(AVStream* stream, const char* key, const char* value) {
     return av_dict_set(&stream->metadata, key, value, 0);
 }

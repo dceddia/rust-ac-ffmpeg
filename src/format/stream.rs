@@ -20,6 +20,7 @@ extern "C" {
     fn ffw_stream_get_r_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
     fn ffw_stream_get_avg_frame_rate(stream: *const c_void, num: *mut u32, den: *mut u32) -> i64;
     fn ffw_stream_get_rotation(stream: *const c_void) -> f64;
+    fn ffw_stream_set_time_base(stream: *mut c_void, num: u32, den: u32);
     fn ffw_stream_set_discard(stream: *mut c_void, discard: c_int);
     fn ffw_stream_get_codec_parameters(stream: *const c_void) -> *mut c_void;
     fn ffw_stream_set_metadata(
@@ -80,6 +81,12 @@ impl Stream {
     /// Get stream time base.
     pub fn time_base(&self) -> TimeBase {
         self.time_base
+    }
+
+    /// Set stream time base. Must be called before the muxer header is written.
+    pub fn set_time_base(&mut self, time_base: TimeBase) {
+        unsafe { ffw_stream_set_time_base(self.ptr, time_base.num(), time_base.den()) };
+        self.time_base = time_base;
     }
 
     /// Get the best-guess frame rate
