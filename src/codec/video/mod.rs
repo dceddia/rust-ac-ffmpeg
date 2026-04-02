@@ -43,6 +43,8 @@ pub struct VideoDecoderBuilder {
     time_base: TimeBase,
     rotation: f64,
     hwaccel_enabled: bool,
+    /// If true, skip creating our custom VTDecoder and use FFmpeg's hwaccel instead
+    use_ffmpeg_hwaccel: bool,
 
     enable_reordering: bool,
 
@@ -62,6 +64,7 @@ impl VideoDecoderBuilder {
             time_base,
             rotation: 0.0,
             hwaccel_enabled: false,
+            use_ffmpeg_hwaccel: false,
             enable_reordering: false,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
@@ -186,6 +189,16 @@ impl VideoDecoderBuilder {
         Ok(self)
     }
 
+    /// Enable FFmpeg's built-in hardware acceleration without our custom VTDecoder.
+    /// Use this as a fallback when our VTDecoder fails during decode.
+    pub fn enable_ffmpeg_hwaccel(mut self) -> Result<Self, Error> {
+        let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
+        self.hwaccel_enabled = true;
+        self.use_ffmpeg_hwaccel = true;
+
+        Ok(self)
+    }
+
     /// Get the codec parameters.
     pub fn codec_parameters(&self) -> VideoCodecParameters {
         let ptr = unsafe { super::ffw_decoder_get_codec_parameters(self.ptr) };
@@ -229,7 +242,8 @@ impl VideoDecoderBuilder {
             }
         }
 
-        if self.hwaccel_enabled {
+        // Create our custom VTDecoder if hwaccel is enabled and we're not explicitly using FFmpeg's hwaccel
+        if self.hwaccel_enabled && !self.use_ffmpeg_hwaccel {
             #[cfg(target_os = "macos")]
             {
                 let params = self.codec_parameters();
@@ -373,14 +387,16 @@ impl VideoDecoder {
             // Get codec parameters from the current decoder
             let params = self.codec_parameters();
 
-            // Create a new decoder without hardware acceleration
-            // Use all CPU cores for software decoding to keep up with real-time playback
-            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params).map(|b| {
-                b.time_base(self.time_base)
-                    .rotation(self.rotation)
-                    .with_thread_count(0)
-                    .build()
-            });
+            // Create a new decoder with FFmpeg's hardware acceleration (not our custom VTDecoder).
+            // This uses FFmpeg's built-in VideoToolbox support instead of our custom wrapper.
+            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params)
+                .and_then(|b| {
+                    b.time_base(self.time_base)
+                        .rotation(self.rotation)
+                        .with_thread_count(0)
+                        .enable_ffmpeg_hwaccel()
+                })
+                .map(|b| b.build());
 
             match new_decoder {
                 Ok(Ok(mut decoder)) => {
