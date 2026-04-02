@@ -160,7 +160,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     switch (params->codec_id) {
         case AV_CODEC_ID_HEVC:
             // kCMVideoCodecType_HEVC = 'hvc1' (available macOS 10.13+)
-            codecType = 'hvc1';
+            codecType = kCMVideoCodecType_HEVC;
             extradataAtomName = "hvcC";
             break;
         case AV_CODEC_ID_H264:
@@ -354,8 +354,10 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     }
 
     VTDecodeInfoFlags flagOut = 0;
+    bool is_discard = (packet->flags & AV_PKT_FLAG_DISCARD) != 0;
 
     status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
+
     switch (status) {
         case noErr:
             break;
@@ -395,11 +397,42 @@ static void didDecompress(void *decompressionOutputRefCon,
 
     int64_t pts = presentationTimeStamp.value;
 
-    // Check for decode errors - send to Rust for handling
-    if (status != noErr) {
-        printf("VT: didDecompress error status=%d pts=%lld\n", (int)status, (long long)pts);
-        decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
+    // These frames come with the error kVTVideoDecoderReferenceMissingErr but it's not really an error.
+    //
+    // From the doc string:
+    //   The kVTDecodeInfo_SkippedLeadingFrameDropped may be set if a leading frame after a sync frame is dropped.
+    //   This can happen when a seek to a sync frame is initiated and, due to frame reordering, there are leading
+    //   frames following the sync frame that cannot be decoded due to missing references.  Dropping these frames
+    //   has no impact to playback since the non-decodeable frames will not be rendered.
+    //   If kVTDecodeInfo_SkippedLeadingFrameDropped is set, kVTDecodeInfo_FrameDropped will also be set.
+    //
+    // I saw these on IMG_0535.mov when seeking: the first 3 frames after a key frame actually had a PTS that fell *before*
+    // the key frame, so they referenced the previous GOP. They weren't meant to be rendered.
+    if (
+      (infoFlags & kVTDecodeInfo_SkippedLeadingFrameDropped) != 0 ||
+      (infoFlags & kVTDecodeInfo_FrameDropped) != 0
+    ) {
+        // Report as skipped, not error
+        decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
         return;
+    }
+
+    // Check for decode errors
+    // Soft errors (bad data, missing reference) - skip this frame, decoder will recover at next keyframe
+    // Hard errors (invalid session, malfunction) - report to Rust for fallback handling
+    if (status != noErr) {
+        switch (status) {
+            case kVTVideoDecoderBadDataErr:  // -12909: corrupted frame data
+            case kVTVideoDecoderReferenceMissingErr:  // -17694: missing reference frame
+                printf("VT: kVTVideoDecoderReferenceMissingErr status=%d pts=%lld\n", (int)status, (long long)pts);
+                decoder->rust_callback(decoder->rust_context, NULL, 0, pts);  // Report as skipped, not error
+                return;
+            default:
+                // Hard error - report to Rust for potential fallback
+                printf("VT: didDecompress error status=%d pts=%lld\n", (int)status, (long long)pts);
+                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
+                return;
+        }
     }
 
     // Filter out stale frames from before a seek/flush
