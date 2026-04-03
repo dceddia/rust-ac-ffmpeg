@@ -93,6 +93,18 @@ int ffw_stream_set_metadata(AVStream* stream, const char* key, const char* value
     return av_dict_set(&stream->metadata, key, value, 0);
 }
 
+int ffw_stream_get_index_entries_count(const AVStream* stream) {
+    return avformat_index_get_entries_count(stream);
+}
+
+int ffw_stream_get_index_entry(const AVStream* stream, int idx, int64_t* timestamp, int* keyframe) {
+    const AVIndexEntry* entry = avformat_index_get_entry(stream, idx);
+    if (!entry) return -1;
+    *timestamp = entry->timestamp;
+    *keyframe = (entry->flags & AVINDEX_KEYFRAME) ? 1 : 0;
+    return 0;
+}
+
 const char* ffw_stream_get_metadata(AVStream* stream, const char* key) {
     AVDictionaryEntry *entry = av_dict_get(stream->metadata, key, NULL, 0);
 

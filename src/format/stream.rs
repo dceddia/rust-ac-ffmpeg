@@ -29,6 +29,13 @@ extern "C" {
         value: *const c_char,
     ) -> c_int;
     fn ffw_stream_get_metadata(stream: *mut c_void, key: *const c_char) -> *const c_char;
+    fn ffw_stream_get_index_entries_count(stream: *const c_void) -> c_int;
+    fn ffw_stream_get_index_entry(
+        stream: *const c_void,
+        idx: c_int,
+        timestamp: *mut i64,
+        keyframe: *mut c_int,
+    ) -> c_int;
 }
 
 /// Used to specify whether (and how) a stream's packets should be discarded while demuxing.
@@ -210,6 +217,28 @@ impl Stream {
         if ret < 0 {
             panic!("unable to allocate metadata");
         }
+    }
+
+    /// Get the timestamps of all keyframes in this stream's index.
+    /// Returns an empty Vec if the container doesn't have an index (e.g. raw MPEG-TS).
+    pub fn keyframe_timestamps(&self) -> Vec<Timestamp> {
+        let count = unsafe { ffw_stream_get_index_entries_count(self.ptr) };
+        if count <= 0 {
+            return Vec::new();
+        }
+
+        let mut keyframes = Vec::new();
+        for i in 0..count {
+            let mut timestamp: i64 = 0;
+            let mut keyframe: c_int = 0;
+            let ret = unsafe {
+                ffw_stream_get_index_entry(self.ptr, i, &mut timestamp, &mut keyframe)
+            };
+            if ret == 0 && keyframe != 0 {
+                keyframes.push(Timestamp::new(timestamp, self.time_base));
+            }
+        }
+        keyframes
     }
 
     /// Get stream metadata.
