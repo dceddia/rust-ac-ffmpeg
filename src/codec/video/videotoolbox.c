@@ -164,10 +164,14 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
             extradataAtomName = "hvcC";
             break;
         case AV_CODEC_ID_H264:
-        default:
             codecType = kCMVideoCodecType_H264;
             extradataAtomName = "avcC";
             break;
+        default:
+            printf("Error: Unsupported codec ID %d for VideoToolbox decoding\n", params->codec_id);
+            avcodec_parameters_free(&params_copy);
+            free(decoder);
+            return NULL;
     }
 
 

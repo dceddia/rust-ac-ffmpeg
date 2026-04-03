@@ -43,8 +43,6 @@ pub struct VideoDecoderBuilder {
     time_base: TimeBase,
     rotation: f64,
     hwaccel_enabled: bool,
-    /// If true, skip creating our custom VTDecoder and use FFmpeg's hwaccel instead
-    use_ffmpeg_hwaccel: bool,
 
     enable_reordering: bool,
 
@@ -64,7 +62,6 @@ impl VideoDecoderBuilder {
             time_base,
             rotation: 0.0,
             hwaccel_enabled: false,
-            use_ffmpeg_hwaccel: false,
             enable_reordering: false,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
@@ -189,16 +186,6 @@ impl VideoDecoderBuilder {
         Ok(self)
     }
 
-    /// Enable FFmpeg's built-in hardware acceleration without our custom VTDecoder.
-    /// Use this as a fallback when our VTDecoder fails during decode.
-    pub fn enable_ffmpeg_hwaccel(mut self) -> Result<Self, Error> {
-        let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
-        self.hwaccel_enabled = true;
-        self.use_ffmpeg_hwaccel = true;
-
-        Ok(self)
-    }
-
     /// Get the codec parameters.
     pub fn codec_parameters(&self) -> VideoCodecParameters {
         let ptr = unsafe { super::ffw_decoder_get_codec_parameters(self.ptr) };
@@ -235,31 +222,61 @@ impl VideoDecoderBuilder {
     }
 
     /// Build the decoder.
+    ///
+    /// When hwaccel is enabled on macOS, tries in order:
+    /// 1. Custom VTDecoder (our VideoToolbox wrapper)
+    /// 2. FFmpeg's built-in hwaccel (already configured on self.ptr)
+    /// 3. Pure software decoding (rebuild without hwaccel)
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
-        unsafe {
-            if super::ffw_decoder_open(self.ptr) != 0 {
-                return Err(Error::new("unable to build the decoder"));
-            }
-        }
+        // Decide strategy based on flags and platform
+        #[cfg(target_os = "macos")]
+        let try_custom_vt = self.hwaccel_enabled;
+        #[cfg(not(target_os = "macos"))]
+        let try_custom_vt = false;
 
-        // Create our custom VTDecoder if hwaccel is enabled and we're not explicitly using FFmpeg's hwaccel
-        if self.hwaccel_enabled && !self.use_ffmpeg_hwaccel {
-            #[cfg(target_os = "macos")]
-            {
-                let params = self.codec_parameters();
-                match videotoolbox::VTDecoder::new(&params, self.time_base) {
-                    Ok(decoder) => self.vt_decoder = Some(decoder),
-                    Err(e) => {
-                        warn!(
-                            "Hardware decoder creation failed: {}, falling back to software",
-                            e
-                        );
-                        // vt_decoder remains None, will use software decoder
+        // Step 1: Try custom VTDecoder
+        #[cfg(target_os = "macos")]
+        if try_custom_vt {
+            let params = self.codec_parameters();
+            match videotoolbox::VTDecoder::new(&params, self.time_base) {
+                Ok(decoder) => {
+                    self.vt_decoder = Some(decoder);
+                    // Still need to open the FFmpeg decoder (used for codec_parameters, reorder buffer, etc.)
+                    if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
+                        return Err(Error::new("unable to open FFmpeg decoder context"));
                     }
+                    return self.finish_build();
+                }
+                Err(e) => {
+                    warn!("Custom VT decoder failed: {}; trying FFmpeg hwaccel", e);
                 }
             }
         }
 
+        // Step 2: FFmpeg decoder (with hwaccel already configured if enable_hardware_accel was called)
+        if unsafe { super::ffw_decoder_open(self.ptr) } == 0 {
+            return self.finish_build();
+        }
+
+        // Step 3: If hwaccel was enabled and FFmpeg failed to open, retry without hwaccel
+        if self.hwaccel_enabled {
+            warn!("FFmpeg hwaccel decoder failed to open; trying pure software");
+            let params = self.codec_parameters();
+            unsafe { super::ffw_decoder_free(self.ptr) };
+            self.ptr = ptr::null_mut();
+
+            let mut builder = VideoDecoderBuilder::from_codec_parameters(&params)?;
+            builder = builder.time_base(self.time_base).rotation(self.rotation);
+            if self.enable_reordering {
+                builder = builder.enable_reordering();
+            }
+            return builder.build();
+        }
+
+        Err(Error::new("unable to build the decoder"))
+    }
+
+    fn finish_build(mut self) -> Result<VideoDecoder, Error> {
         let ptr = self.ptr;
 
         let reorder_buffer = if self.enable_reordering {
@@ -276,7 +293,7 @@ impl VideoDecoderBuilder {
 
         self.ptr = ptr::null_mut();
 
-        let res = VideoDecoder {
+        Ok(VideoDecoder {
             ptr,
             time_base: self.time_base,
             rotation: self.rotation,
@@ -284,9 +301,7 @@ impl VideoDecoderBuilder {
 
             #[cfg(target_os = "macos")]
             vt_decoder: self.vt_decoder.take(),
-        };
-
-        Ok(res)
+        })
     }
 }
 
@@ -374,56 +389,6 @@ impl VideoDecoder {
 
     pub fn clear_reorder_buffer(&mut self) {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
-    }
-
-    /// Disable hardware decoding and fall back to software decoder.
-    /// This recreates the underlying FFmpeg decoder without hardware acceleration.
-    /// This is a no-op if already using software decoding.
-    #[cfg(target_os = "macos")]
-    pub fn fallback_to_software(&mut self) {
-        if self.vt_decoder.take().is_some() {
-            warn!("Falling back to software decode");
-
-            // Get codec parameters from the current decoder
-            let params = self.codec_parameters();
-
-            // Create a new decoder with FFmpeg's hardware acceleration (not our custom VTDecoder).
-            // This uses FFmpeg's built-in VideoToolbox support instead of our custom wrapper.
-            let new_decoder = VideoDecoderBuilder::from_codec_parameters(&params)
-                .and_then(|b| {
-                    b.time_base(self.time_base)
-                        .rotation(self.rotation)
-                        .with_thread_count(0)
-                        .enable_ffmpeg_hwaccel()
-                })
-                .map(|b| b.build());
-
-            match new_decoder {
-                Ok(Ok(mut decoder)) => {
-                    // Free the old decoder
-                    unsafe { super::ffw_decoder_free(self.ptr) };
-                    // Replace with the new software-only decoder
-                    self.ptr = decoder.ptr;
-                    self.reorder_buffer = decoder.reorder_buffer.take();
-                    // Prevent the new decoder from being dropped (we took ownership of ptr)
-                    decoder.ptr = std::ptr::null_mut();
-                    // decoder will be dropped here but ptr is null so ffw_decoder_free is safe
-                }
-                Ok(Err(e)) => {
-                    warn!("Failed to create software decoder: {}", e);
-                }
-                Err(e) => {
-                    warn!("Failed to create software decoder: {}", e);
-                }
-            }
-        }
-    }
-
-    /// Disable hardware decoding and fall back to software decoder.
-    /// This is a no-op on non-macOS platforms.
-    #[cfg(not(target_os = "macos"))]
-    pub fn fallback_to_software(&mut self) {
-        // No-op on non-macOS
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
