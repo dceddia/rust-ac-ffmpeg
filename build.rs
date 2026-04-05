@@ -22,8 +22,7 @@ fn main() {
         .file("src/codec/mod.c")
         .file("src/codec/frame.c")
         .file("src/codec/audio/resampler.c")
-        .file("src/codec/video/scaler.c")
-        .file("src/render/gl_mac.c");
+        .file("src/codec/video/scaler.c");
 
     #[cfg(target_os = "macos")]
     let build = build.file("src/codec/video/videotoolbox.c");
