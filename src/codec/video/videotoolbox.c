@@ -13,6 +13,7 @@
 #include <libavcodec/packet.h>
 #include <CoreVideo/CoreVideo.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreMedia/CoreMedia.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -60,6 +61,13 @@ typedef struct VTDecoder {
     OSType output_pixel_format;   // NV12 (8-bit) or P010 (10-bit)
 } VTDecoder;
 
+typedef enum SeekSampleTreatment {
+    SEEK_SAMPLE_TREATMENT_NORMAL = 0,
+    SEEK_SAMPLE_TREATMENT_DECODE_ONLY = 1,
+    SEEK_SAMPLE_TREATMENT_SAVE_FOR_FUTURE = 2,
+    SEEK_SAMPLE_TREATMENT_DISPLAY_NOW = 3,
+} SeekSampleTreatment;
+
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
     CFNumberRef number;
     number = CFNumberCreate(NULL, kCFNumberSInt32Type, &value);
@@ -83,6 +91,10 @@ static void dict_set_string(CFMutableDictionaryRef dict, CFStringRef key, const 
 
 static void dict_set_boolean(CFMutableDictionaryRef dict, CFStringRef key, bool value) {
     CFDictionarySetValue(dict, key, value ? kCFBooleanTrue: kCFBooleanFalse);
+}
+
+static void dict_remove(CFMutableDictionaryRef dict, CFStringRef key) {
+    CFDictionaryRemoveValue(dict, key);
 }
 
 static void dict_set_object(CFMutableDictionaryRef dict, CFStringRef key, CFTypeRef *value) {
@@ -145,7 +157,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
     decoder->generation = 0;
-
     // Choose output pixel format based on bit depth
     bool is_10bit = params->bits_per_raw_sample > 8
                  || params->profile == FF_PROFILE_HEVC_MAIN_10;
@@ -298,7 +309,13 @@ void vt_decoder_free(VTDecoder *decoder) {
     free(decoder);
 }
 
-int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
+int vt_decode_frame(
+    VTDecoder *decoder,
+    AVPacket* packet,
+    int reset_decoder,
+    int treatment_raw,
+    int hevc_sync_nal_type
+) {
     CMBlockBufferRef blockBuffer = NULL;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, (void *)packet->data, packet->size, kCFAllocatorNull, NULL, 0, packet->size, 0, &blockBuffer);
     if (status != kCMBlockBufferNoErr) {
@@ -309,21 +326,27 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     CMSampleBufferRef sampleBuffer = NULL;
     const size_t sampleSizeArray[] = { packet->size };
 
-    // PTS goes in presentationTimeStamp (VT echoes it back on output).
-    // DTS goes in decodeTimeStamp (VT uses it for temporal reordering).
     CMTime presentationTime = CMTimeMake(packet->pts * packet->time_base.num, packet->time_base.den);
     CMTime duration = CMTimeMake(packet->duration * packet->time_base.num, packet->time_base.den);
     CMTime decodeTimeStamp = CMTimeMake(packet->dts * packet->time_base.num, packet->time_base.den);
+
     CMSampleTimingInfo timingInfo = {
         .duration = duration,
         .presentationTimeStamp = presentationTime,
         .decodeTimeStamp = decodeTimeStamp
     };
 
-    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;
+    SeekSampleTreatment treatment = (SeekSampleTreatment)treatment_raw;
+    bool legacy_discard = (packet->flags & AV_PKT_FLAG_DISCARD) != 0;
+    if (treatment == SEEK_SAMPLE_TREATMENT_NORMAL && legacy_discard) {
+        treatment = SEEK_SAMPLE_TREATMENT_DECODE_ONLY;
+    }
 
-    // Performance improvement: don't produce a frame if it will not be displayed. HUGE speedup.
-    if(packet->flags & AV_PKT_FLAG_DISCARD) {
+    VTDecodeFrameFlags flags =
+        kVTDecodeFrame_EnableAsynchronousDecompression |
+        kVTDecodeFrame_EnableTemporalProcessing;
+
+    if (treatment == SEEK_SAMPLE_TREATMENT_DECODE_ONLY) {
         flags |= kVTDecodeFrame_DoNotOutputFrame;
     }
 
@@ -360,21 +383,42 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
         return -1;
     }
 
-    // Set sample attachments based on DISCARD flag
+    // Set sample attachments based on seek treatment.
     CFArrayRef sampleAttachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, true);
     if (sampleAttachmentsArray && CFArrayGetCount(sampleAttachmentsArray) > 0) {
         CFMutableDictionaryRef sampleAttachments = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(sampleAttachmentsArray, 0);
+        CFStringRef saveForFutureKey = CFSTR("SaveForFuture");
+        CFStringRef hevcSyncNalKey = CFSTR("HEVCSyncSampleNALUnitType");
 
         // reset_decoder flag no longer sets ResetDecoderBeforeDecoding.
         // See comment below on keyframes — relying on NAL-level signaling instead.
         (void)reset_decoder;
 
-        if (packet->flags & AV_PKT_FLAG_DISCARD) {
-            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, kCFBooleanTrue);
+        dict_set_boolean(sampleAttachments, kCMSampleAttachmentKey_EarlierDisplayTimesAllowed, false);
+        dict_remove(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay);
+        dict_remove(sampleAttachments, kCMSampleAttachmentKey_DisplayImmediately);
+        dict_remove(sampleAttachments, kCMSampleAttachmentKey_IsDependedOnByOthers);
+        dict_remove(sampleAttachments, saveForFutureKey);
+
+        if (treatment == SEEK_SAMPLE_TREATMENT_DECODE_ONLY) {
+            dict_set_boolean(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, true);
+        } else if (treatment == SEEK_SAMPLE_TREATMENT_SAVE_FOR_FUTURE) {
+            dict_set_boolean(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, true);
+            CFDictionaryRef saveForFutureTime = CMTimeCopyAsDictionary(presentationTime, kCFAllocatorDefault);
+            if (saveForFutureTime) {
+                CFDictionarySetValue(sampleAttachments, saveForFutureKey, saveForFutureTime);
+                CFRelease(saveForFutureTime);
+            }
+        } else if (treatment == SEEK_SAMPLE_TREATMENT_DISPLAY_NOW) {
+            dict_set_boolean(sampleAttachments, kCMSampleAttachmentKey_DisplayImmediately, true);
+            dict_set_boolean(sampleAttachments, kCMSampleAttachmentKey_IsDependedOnByOthers, false);
         }
 
         if (packet->flags & AV_PKT_FLAG_KEY) {
             CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DependsOnOthers, kCFBooleanFalse);
+            if (hevc_sync_nal_type >= 0) {
+                dict_set_i32(sampleAttachments, hevcSyncNalKey, hevc_sync_nal_type);
+            }
             // NOTE: Not setting ResetDecoderBeforeDecoding here — QuickTime doesn't set it.
             // For HEVC CRA keyframes, the NAL type (21) signals the access point at the
             // bitstream level. ResetDecoderBeforeDecoding may clear internal HEVC state
@@ -387,7 +431,6 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     }
 
     VTDecodeInfoFlags flagOut = 0;
-    bool is_discard = (packet->flags & AV_PKT_FLAG_DISCARD) != 0;
 
     status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
 

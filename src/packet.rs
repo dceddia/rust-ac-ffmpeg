@@ -57,6 +57,29 @@ impl VideoAccessUnitInfo {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeekSampleTreatment {
+    Normal,
+    DecodeOnly,
+    SaveForFuture,
+    DisplayNow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeekSampleHints {
+    pub treatment: SeekSampleTreatment,
+    pub hevc_sync_nal_type: Option<u8>,
+}
+
+impl Default for SeekSampleHints {
+    fn default() -> Self {
+        Self {
+            treatment: SeekSampleTreatment::Normal,
+            hevc_sync_nal_type: None,
+        }
+    }
+}
+
 fn video_codec_kind(params: &VideoCodecParameters) -> Option<VideoCodecKind> {
     match params.decoder_name()? {
         "h264" => Some(VideoCodecKind::H264),
@@ -248,6 +271,7 @@ extern "C" {
 pub struct PacketMut {
     ptr: *mut c_void,
     time_base: TimeBase,
+    seek_hints: SeekSampleHints,
 }
 
 impl PacketMut {
@@ -268,6 +292,7 @@ impl PacketMut {
             Self {
                 ptr,
                 time_base: TimeBase::MICROSECONDS,
+                seek_hints: SeekSampleHints::default(),
             }
         }
     }
@@ -393,15 +418,31 @@ impl PacketMut {
         }
     }
 
+    pub fn with_seek_treatment(mut self, treatment: SeekSampleTreatment) -> Self {
+        self.seek_hints.treatment = treatment;
+        self
+    }
+
+    pub fn with_hevc_sync_nal_type(mut self, nal_type: Option<u8>) -> Self {
+        self.seek_hints.hevc_sync_nal_type = nal_type;
+        self
+    }
+
+    pub fn seek_hints(&self) -> SeekSampleHints {
+        self.seek_hints
+    }
+
     /// Make the packet immutable.
     pub fn freeze(mut self) -> Packet {
         let ptr = self.ptr;
+        let seek_hints = self.seek_hints;
 
         self.ptr = ptr::null_mut();
 
         Packet {
             ptr,
             time_base: self.time_base,
+            seek_hints,
         }
     }
 }
@@ -434,12 +475,17 @@ unsafe impl Sync for PacketMut {}
 pub struct Packet {
     ptr: *mut c_void,
     time_base: TimeBase,
+    seek_hints: SeekSampleHints,
 }
 
 impl Packet {
     /// Create a new immutable packet from its raw representation.
     pub(crate) unsafe fn from_raw_ptr(ptr: *mut c_void, time_base: TimeBase) -> Self {
-        Packet { ptr, time_base }
+        Packet {
+            ptr,
+            time_base,
+            seek_hints: SeekSampleHints::default(),
+        }
     }
 
     /// Get stream index.
@@ -533,6 +579,20 @@ impl Packet {
         self
     }
 
+    pub fn with_seek_treatment(mut self, treatment: SeekSampleTreatment) -> Self {
+        self.seek_hints.treatment = treatment;
+        self
+    }
+
+    pub fn with_hevc_sync_nal_type(mut self, nal_type: Option<u8>) -> Self {
+        self.seek_hints.hevc_sync_nal_type = nal_type;
+        self
+    }
+
+    pub fn seek_hints(&self) -> SeekSampleHints {
+        self.seek_hints
+    }
+
     /// Check if the discard flag is set.
     pub fn is_discard(&self) -> bool {
         unsafe { ffw_packet_is_discard(self.ptr) != 0 }
@@ -620,6 +680,7 @@ impl Packet {
         PacketMut {
             ptr,
             time_base: self.time_base,
+            seek_hints: self.seek_hints,
         }
     }
 }
@@ -635,6 +696,7 @@ impl Clone for Packet {
         Packet {
             ptr,
             time_base: self.time_base,
+            seek_hints: self.seek_hints,
         }
     }
 }

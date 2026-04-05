@@ -4,7 +4,7 @@ use std::sync::mpsc::TryRecvError;
 use log::{debug, trace, warn};
 
 use crate::codec::CodecError;
-use crate::packet::Packet;
+use crate::packet::{Packet, SeekSampleTreatment};
 use crate::time::TimeBase;
 use crate::{codec::VideoCodecParameters, Error};
 
@@ -47,6 +47,8 @@ extern "C" {
         decoder: *mut c_void,
         packet: *const c_void,
         reset_decoder: i32,
+        treatment: i32,
+        hevc_sync_nal_type: i32,
     ) -> i32;
     pub(crate) fn vt_decoder_can_decode_params(
         existing_decoder: *mut c_void,
@@ -104,6 +106,15 @@ impl DecodedFrame {
 }
 
 impl VTDecoder {
+    fn treatment_code(packet: &Packet) -> i32 {
+        match packet.seek_hints().treatment {
+            SeekSampleTreatment::Normal => 0,
+            SeekSampleTreatment::DecodeOnly => 1,
+            SeekSampleTreatment::SaveForFuture => 2,
+            SeekSampleTreatment::DisplayNow => 3,
+        }
+    }
+
     pub fn new(params: &VideoCodecParameters, time_base: TimeBase) -> Result<VTDecoder, Error> {
         // TODO NEXT: Maybe use a channel to send packets to the decoder? (and put the decoder in a separate thread)
         // Gotta fix the issue where it either freezes (using .recv()) or decodes infinitely-ish (using .try_recv()).
@@ -155,7 +166,16 @@ impl VTDecoder {
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), CodecError> {
-        let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 1) };
+        let hints = packet.seek_hints();
+        let ret = unsafe {
+            vt_decode_frame(
+                self.vt_decoder_ptr,
+                packet.as_ptr(),
+                1,
+                Self::treatment_code(&packet),
+                hints.hevc_sync_nal_type.map(i32::from).unwrap_or(-1),
+            )
+        };
         if ret < 0 {
             warn!("VideoToolbox push_with_reset returned error {}", ret);
             return Err(CodecError::from_raw_error_code(ret));
@@ -180,7 +200,16 @@ impl VTDecoder {
     }
 
     fn decode_frame(&mut self, packet: Packet) -> Result<(), CodecError> {
-        let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 0) };
+        let hints = packet.seek_hints();
+        let ret = unsafe {
+            vt_decode_frame(
+                self.vt_decoder_ptr,
+                packet.as_ptr(),
+                0,
+                Self::treatment_code(&packet),
+                hints.hevc_sync_nal_type.map(i32::from).unwrap_or(-1),
+            )
+        };
         if ret < 0 {
             warn!("VideoToolbox decode_frame returned error {}", ret);
             return Err(CodecError::from_raw_error_code(ret));
