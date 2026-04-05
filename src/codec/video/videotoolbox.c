@@ -228,9 +228,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
         return NULL;
     }
 
-    // Match QuickTime: set RealTime mode for better error recovery
-    VTSessionSetProperty(decoder->decompressSession, CFSTR("RealTime"), kCFBooleanTrue);
-
     // Set up hardware device and frames context for av_hwframe_transfer_data support
     decoder->hw_device_ref = NULL;
     decoder->hw_frames_ref = NULL;
@@ -321,35 +318,15 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
         .decodeTimeStamp = decodeTimeStamp
     };
 
-    VTDecodeFrameFlags flags =
-        kVTDecodeFrame_EnableAsynchronousDecompression |
-        kVTDecodeFrame_EnableTemporalProcessing;
+    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;
 
     if ((packet->flags & AV_PKT_FLAG_DISCARD) != 0) {
         flags |= kVTDecodeFrame_DoNotOutputFrame;
     }
 
-    // For keyframes, create a fresh CMFormatDescription. This may signal VT's
-    // HEVC decoder to reinitialize parser state at CRA random access points,
-    // preventing -12909 (BadDataErr) on RASL frames after a flush+seek.
-    CMFormatDescriptionRef fmtDesc = decoder->formatDecsription;
-    CMFormatDescriptionRef freshFmtDesc = NULL;
-    if (packet->flags & AV_PKT_FLAG_KEY) {
-        OSStatus fmtStatus = CMVideoFormatDescriptionCreate(
-            kCFAllocatorDefault,
-            CMFormatDescriptionGetMediaSubType(decoder->formatDecsription),
-            decoder->params->width,
-            decoder->params->height,
-            CMFormatDescriptionGetExtensions(decoder->formatDecsription),
-            &freshFmtDesc);
-        if (fmtStatus == noErr) {
-            fmtDesc = freshFmtDesc;
-        }
-    }
-
     status = CMSampleBufferCreateReady(kCFAllocatorDefault,
                                        blockBuffer,
-                                       fmtDesc,
+                                       decoder->formatDecsription,
                                        1,
                                        1,
                                        &timingInfo,
@@ -358,7 +335,6 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
                                        &sampleBuffer);
     if (status != kCMBlockBufferNoErr || !sampleBuffer) {
         printf("Error: Creating sample buffer failed.\n");
-        if (freshFmtDesc) CFRelease(freshFmtDesc);
         return -1;
     }
 
@@ -398,7 +374,6 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
     CFRelease(sampleBuffer);
     CFRelease(blockBuffer);
-    if (freshFmtDesc) CFRelease(freshFmtDesc);
 
     if (status != noErr) {
         return -1;
