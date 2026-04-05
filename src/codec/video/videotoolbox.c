@@ -228,6 +228,9 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
         return NULL;
     }
 
+    // Match QuickTime: set RealTime mode for better error recovery
+    VTSessionSetProperty(decoder->decompressSession, CFSTR("RealTime"), kCFBooleanTrue);
+
     // Set up hardware device and frames context for av_hwframe_transfer_data support
     decoder->hw_device_ref = NULL;
     decoder->hw_frames_ref = NULL;
@@ -306,7 +309,8 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     CMSampleBufferRef sampleBuffer = NULL;
     const size_t sampleSizeArray[] = { packet->size };
 
-    // Set up timing info from AVPacket
+    // PTS goes in presentationTimeStamp (VT echoes it back on output).
+    // DTS goes in decodeTimeStamp (VT uses it for temporal reordering).
     CMTime presentationTime = CMTimeMake(packet->pts * packet->time_base.num, packet->time_base.den);
     CMTime duration = CMTimeMake(packet->duration * packet->time_base.num, packet->time_base.den);
     CMTime decodeTimeStamp = CMTimeMake(packet->dts * packet->time_base.num, packet->time_base.den);
@@ -316,16 +320,34 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
         .decodeTimeStamp = decodeTimeStamp
     };
 
-    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;// | kVTDecodeFrame_EnableTemporalProcessing;
+    VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;
 
     // Performance improvement: don't produce a frame if it will not be displayed. HUGE speedup.
     if(packet->flags & AV_PKT_FLAG_DISCARD) {
         flags |= kVTDecodeFrame_DoNotOutputFrame;
     }
 
+    // For keyframes, create a fresh CMFormatDescription. This may signal VT's
+    // HEVC decoder to reinitialize parser state at CRA random access points,
+    // preventing -12909 (BadDataErr) on RASL frames after a flush+seek.
+    CMFormatDescriptionRef fmtDesc = decoder->formatDecsription;
+    CMFormatDescriptionRef freshFmtDesc = NULL;
+    if (packet->flags & AV_PKT_FLAG_KEY) {
+        OSStatus fmtStatus = CMVideoFormatDescriptionCreate(
+            kCFAllocatorDefault,
+            CMFormatDescriptionGetMediaSubType(decoder->formatDecsription),
+            decoder->params->width,
+            decoder->params->height,
+            CMFormatDescriptionGetExtensions(decoder->formatDecsription),
+            &freshFmtDesc);
+        if (fmtStatus == noErr) {
+            fmtDesc = freshFmtDesc;
+        }
+    }
+
     status = CMSampleBufferCreateReady(kCFAllocatorDefault,
                                        blockBuffer,
-                                       decoder->formatDecsription,
+                                       fmtDesc,
                                        1,
                                        1,
                                        &timingInfo,
@@ -334,6 +356,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
                                        &sampleBuffer);
     if (status != kCMBlockBufferNoErr || !sampleBuffer) {
         printf("Error: Creating sample buffer failed.\n");
+        if (freshFmtDesc) CFRelease(freshFmtDesc);
         return -1;
     }
 
@@ -342,18 +365,24 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
     if (sampleAttachmentsArray && CFArrayGetCount(sampleAttachmentsArray) > 0) {
         CFMutableDictionaryRef sampleAttachments = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(sampleAttachmentsArray, 0);
 
-        if (reset_decoder) {
-            CFDictionarySetValue(sampleAttachments, kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding, kCFBooleanTrue);
+        // reset_decoder flag no longer sets ResetDecoderBeforeDecoding.
+        // See comment below on keyframes — relying on NAL-level signaling instead.
+        (void)reset_decoder;
+
+        if (packet->flags & AV_PKT_FLAG_DISCARD) {
+            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, kCFBooleanTrue);
         }
 
-        // More attempts at performance improvement during seeking, not sure if this helps honestly.
-        // QuickTime sets these keys though.
-        if (packet->flags & AV_PKT_FLAG_DISCARD) {
-            //CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
-            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DoNotDisplay, kCFBooleanTrue);
+        if (packet->flags & AV_PKT_FLAG_KEY) {
+            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DependsOnOthers, kCFBooleanFalse);
+            // NOTE: Not setting ResetDecoderBeforeDecoding here — QuickTime doesn't set it.
+            // For HEVC CRA keyframes, the NAL type (21) signals the access point at the
+            // bitstream level. ResetDecoderBeforeDecoding may clear internal HEVC state
+            // that the decoder needs to properly identify RASL/RADL leading pictures,
+            // causing -12909 (BadDataErr) instead of -17694 (ReferenceMissingErr).
         } else {
-            // CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
-            //CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
+            CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DependsOnOthers, kCFBooleanTrue);
         }
     }
 
@@ -378,6 +407,7 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
     CFRelease(sampleBuffer);
     CFRelease(blockBuffer);
+    if (freshFmtDesc) CFRelease(freshFmtDesc);
 
     if (status != noErr) {
         return -1;
@@ -396,6 +426,15 @@ static void didDecompress(void *decompressionOutputRefCon,
 {
     VTDecoder *decoder = (VTDecoder *)decompressionOutputRefCon;
     if (!decoder || !decoder->rust_callback) {
+        return;
+    }
+
+    // Filter out stale frames from before a seek/flush.
+    // This MUST happen before error/skip handling — otherwise stale errors
+    // from a previous generation leak into the channel and get misattributed
+    // to the current decode cycle.
+    uint64_t frame_generation = (uint64_t)(uintptr_t)sourceFrameRefCon;
+    if (frame_generation != decoder->generation) {
         return;
     }
 
@@ -426,10 +465,13 @@ static void didDecompress(void *decompressionOutputRefCon,
     // Hard errors (invalid session, malfunction) - report to Rust for fallback handling
     if (status != noErr) {
         switch (status) {
-            case kVTVideoDecoderBadDataErr:  // -12909: corrupted frame data
             case kVTVideoDecoderReferenceMissingErr:  // -17694: missing reference frame
                 printf("VT: kVTVideoDecoderReferenceMissingErr status=%d pts=%lld\n", (int)status, (long long)pts);
                 decoder->rust_callback(decoder->rust_context, NULL, 0, pts);  // Report as skipped, not error
+                return;
+            case kVTVideoDecoderBadDataErr:  // -12909: corrupted frame data
+                printf("VT: kVTVideoDecoderBadDataErr status=%d pts=%lld\n", (int)status, (long long)pts);
+                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
                 return;
             default:
                 // Hard error - report to Rust for potential fallback
@@ -437,13 +479,6 @@ static void didDecompress(void *decompressionOutputRefCon,
                 decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
                 return;
         }
-    }
-
-    // Filter out stale frames from before a seek/flush
-    uint64_t frame_generation = (uint64_t)(uintptr_t)sourceFrameRefCon;
-    if (frame_generation != decoder->generation) {
-        // Don't send stale frames or errors
-        return;
     }
 
     // Call the Rust callback with NULL if pixelBuffer is NULL (for DoNotDisplay frames)
@@ -516,11 +551,21 @@ static void didDecompress(void *decompressionOutputRefCon,
     // Note: The Rust side is responsible for calling av_frame_free when done
 }
 
+// Drain: emit all delayed frames and wait for them to arrive.
+// Does NOT bump generation — we want these frames.
 void vt_decoder_flush(VTDecoder *decoder) {
     if (!decoder) {
         return;
     }
+    VTDecompressionSessionWaitForAsynchronousFrames(decoder->decompressSession);
+}
 
+// Reset: discard all in-flight frames and prepare for new input (e.g. after seek).
+// Bumps generation so the callback filters out stale frames.
+void vt_decoder_flush_buffers(VTDecoder *decoder) {
+    if (!decoder) {
+        return;
+    }
     decoder->generation++;
-    VTDecompressionSessionFinishDelayedFrames(decoder->decompressSession);
+    VTDecompressionSessionWaitForAsynchronousFrames(decoder->decompressSession);
 }

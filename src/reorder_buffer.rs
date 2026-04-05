@@ -140,9 +140,9 @@ mod tests {
         assert_eq!(buffer.capacity(), 3);
 
         // Push frames in reverse PTS order
-        buffer.push(create_test_frame(300)).unwrap();
-        buffer.push(create_test_frame(100)).unwrap();
-        buffer.push(create_test_frame(200)).unwrap();
+        assert!(buffer.push(create_test_frame(300)).is_ok());
+        assert!(buffer.push(create_test_frame(100)).is_ok());
+        assert!(buffer.push(create_test_frame(200)).is_ok());
 
         assert!(buffer.is_full());
         assert_eq!(buffer.len(), 3);
@@ -159,8 +159,8 @@ mod tests {
     fn test_reorder_buffer_overflow() {
         let mut buffer = ReorderBuffer::new(2);
 
-        buffer.push(create_test_frame(100)).unwrap();
-        buffer.push(create_test_frame(200)).unwrap();
+        assert!(buffer.push(create_test_frame(100)).is_ok());
+        assert!(buffer.push(create_test_frame(200)).is_ok());
 
         // Buffer is full, should return the frame
         let overflow_frame = create_test_frame(150);
@@ -172,9 +172,9 @@ mod tests {
     fn test_reorder_buffer_take_by_pts() {
         let mut buffer = ReorderBuffer::new(3);
 
-        buffer.push(create_test_frame(300)).unwrap();
-        buffer.push(create_test_frame(100)).unwrap();
-        buffer.push(create_test_frame(200)).unwrap();
+        assert!(buffer.push(create_test_frame(300)).is_ok());
+        assert!(buffer.push(create_test_frame(100)).is_ok());
+        assert!(buffer.push(create_test_frame(200)).is_ok());
 
         // Take a specific PTS
         let frame = buffer.take_by_pts(Timestamp::new(200, TimeBase::MICROSECONDS));
@@ -192,9 +192,9 @@ mod tests {
     fn test_reorder_buffer_drain() {
         let mut buffer = ReorderBuffer::new(3);
 
-        buffer.push(create_test_frame(300)).unwrap();
-        buffer.push(create_test_frame(100)).unwrap();
-        buffer.push(create_test_frame(200)).unwrap();
+        assert!(buffer.push(create_test_frame(300)).is_ok());
+        assert!(buffer.push(create_test_frame(100)).is_ok());
+        assert!(buffer.push(create_test_frame(200)).is_ok());
 
         let frames = buffer.drain();
         assert_eq!(frames.len(), 3);

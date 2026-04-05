@@ -8,7 +8,218 @@ use std::{
     ptr, slice,
 };
 
-use crate::time::{TimeBase, Timestamp};
+use crate::{
+    codec::VideoCodecParameters,
+    time::{TimeBase, Timestamp},
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoCodecKind {
+    H264,
+    Hevc,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RandomAccessKind {
+    None,
+    Idr,
+    Cra,
+    Bla,
+    RecoveryPoint,
+    Unknown,
+}
+
+impl RandomAccessKind {
+    pub fn is_irap(self) -> bool {
+        matches!(self, Self::Idr | Self::Cra | Self::Bla)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeadingPictureKind {
+    None,
+    Rasl,
+    Radl,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoAccessUnitInfo {
+    pub codec: VideoCodecKind,
+    pub primary_nal_type: u8,
+    pub random_access: RandomAccessKind,
+    pub leading_picture: LeadingPictureKind,
+}
+
+impl VideoAccessUnitInfo {
+    pub fn is_irap(&self) -> bool {
+        self.random_access.is_irap()
+    }
+}
+
+fn video_codec_kind(params: &VideoCodecParameters) -> Option<VideoCodecKind> {
+    match params.decoder_name()? {
+        "h264" => Some(VideoCodecKind::H264),
+        "hevc" | "h265" => Some(VideoCodecKind::Hevc),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoPacketFormat {
+    AnnexB,
+    LengthPrefixed { nal_length_size: usize },
+}
+
+fn nal_length_size(codec: VideoCodecKind, extradata: &[u8]) -> Option<usize> {
+    match codec {
+        VideoCodecKind::H264 => {
+            if extradata.len() >= 5 && extradata[0] == 1 {
+                Some(((extradata[4] & 0x03) + 1) as usize)
+            } else {
+                None
+            }
+        }
+        VideoCodecKind::Hevc => {
+            if extradata.len() >= 22 && extradata[0] == 1 {
+                Some(((extradata[21] & 0x03) + 1) as usize)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn packet_format(codec: VideoCodecKind, extradata: Option<&[u8]>) -> VideoPacketFormat {
+    if let Some(length_size) = extradata.and_then(|extra| nal_length_size(codec, extra)) {
+        return VideoPacketFormat::LengthPrefixed {
+            nal_length_size: length_size,
+        };
+    }
+
+    VideoPacketFormat::AnnexB
+}
+
+fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from;
+    while i + 3 <= data.len() {
+        if i + 4 <= data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
+        {
+            return Some((i, 4));
+        }
+        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            return Some((i, 3));
+        }
+        i += 1;
+    }
+    None
+}
+
+fn annex_b_nal_units<'a>(data: &'a [u8]) -> Vec<&'a [u8]> {
+    let mut units = Vec::new();
+    let mut cursor = 0;
+
+    while let Some((start, prefix_len)) = find_start_code(data, cursor) {
+        let nal_start = start + prefix_len;
+        let next_start = find_start_code(data, nal_start)
+            .map(|(idx, _)| idx)
+            .unwrap_or(data.len());
+        if nal_start < next_start {
+            units.push(&data[nal_start..next_start]);
+        }
+        cursor = next_start;
+    }
+
+    units
+}
+
+fn length_prefixed_nal_units<'a>(data: &'a [u8], nal_length_size: usize) -> Vec<&'a [u8]> {
+    let mut units = Vec::new();
+    let mut cursor = 0;
+
+    while cursor + nal_length_size <= data.len() {
+        let mut nal_len = 0usize;
+        for &byte in &data[cursor..cursor + nal_length_size] {
+            nal_len = (nal_len << 8) | byte as usize;
+        }
+        cursor += nal_length_size;
+
+        if nal_len == 0 || cursor + nal_len > data.len() {
+            break;
+        }
+
+        units.push(&data[cursor..cursor + nal_len]);
+        cursor += nal_len;
+    }
+
+    units
+}
+
+fn nal_units<'a>(
+    codec: VideoCodecKind,
+    data: &'a [u8],
+    extradata: Option<&[u8]>,
+) -> Vec<&'a [u8]> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+
+    match packet_format(codec, extradata) {
+        VideoPacketFormat::LengthPrefixed { nal_length_size } => {
+            length_prefixed_nal_units(data, nal_length_size)
+        }
+        VideoPacketFormat::AnnexB => annex_b_nal_units(data),
+    }
+}
+
+fn classify_h264_access_unit(nal_type: u8) -> Option<VideoAccessUnitInfo> {
+    if !(1..=5).contains(&nal_type) {
+        return None;
+    }
+
+    let random_access = if nal_type == 5 {
+        RandomAccessKind::Idr
+    } else {
+        RandomAccessKind::None
+    };
+
+    Some(VideoAccessUnitInfo {
+        codec: VideoCodecKind::H264,
+        primary_nal_type: nal_type,
+        random_access,
+        leading_picture: LeadingPictureKind::None,
+    })
+}
+
+fn classify_hevc_access_unit(nal_type: u8) -> Option<VideoAccessUnitInfo> {
+    if nal_type > 31 {
+        return None;
+    }
+
+    let random_access = match nal_type {
+        16..=18 => RandomAccessKind::Bla,
+        19..=20 => RandomAccessKind::Idr,
+        21 => RandomAccessKind::Cra,
+        _ => RandomAccessKind::None,
+    };
+
+    let leading_picture = match nal_type {
+        6 | 7 => LeadingPictureKind::Radl,
+        8 | 9 => LeadingPictureKind::Rasl,
+        _ => LeadingPictureKind::None,
+    };
+
+    Some(VideoAccessUnitInfo {
+        codec: VideoCodecKind::Hevc,
+        primary_nal_type: nal_type,
+        random_access,
+        leading_picture,
+    })
+}
 
 extern "C" {
     fn ffw_packet_alloc() -> *mut c_void;
@@ -358,6 +569,40 @@ impl Packet {
         }
     }
 
+    /// Parse supported video packet formats and return access-unit metadata
+    /// for seek-priming decisions.
+    pub fn video_access_unit_info(
+        &self,
+        codec_params: &VideoCodecParameters,
+    ) -> Option<VideoAccessUnitInfo> {
+        let codec = video_codec_kind(codec_params)?;
+        let extradata = codec_params.extradata();
+        let nals = nal_units(codec, self.data(), extradata);
+
+        for nal in nals {
+            let info = match codec {
+                VideoCodecKind::H264 => {
+                    let nal_type = *nal.first()? & 0x1F;
+                    classify_h264_access_unit(nal_type)
+                }
+                VideoCodecKind::Hevc => {
+                    if nal.len() < 2 {
+                        None
+                    } else {
+                        let nal_type = (nal[0] >> 1) & 0x3F;
+                        classify_hevc_access_unit(nal_type)
+                    }
+                }
+            };
+
+            if info.is_some() {
+                return info;
+            }
+        }
+
+        None
+    }
+
     /// Make this packet mutable. If there are no other references to the
     /// packet data, the mutable packet will be created without copying the
     /// data.
@@ -402,3 +647,40 @@ impl Drop for Packet {
 
 unsafe impl Send for Packet {}
 unsafe impl Sync for Packet {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hevc_codec_params_with_hvcc_len4() -> VideoCodecParameters {
+        let mut hvcc = vec![0u8; 22];
+        hvcc[0] = 1;
+        hvcc[21] = 3;
+        VideoCodecParameters::builder("hevc")
+            .unwrap()
+            .extradata(Some(hvcc))
+            .build()
+    }
+
+    #[test]
+    fn parses_hevc_length_prefixed_access_unit_info() {
+        let codec_params = hevc_codec_params_with_hvcc_len4();
+        let packet = PacketMut::from([0u8, 0, 0, 2, 16, 1]).freeze();
+
+        let info = packet.video_access_unit_info(&codec_params).unwrap();
+        assert_eq!(info.codec, VideoCodecKind::Hevc);
+        assert_eq!(info.leading_picture, LeadingPictureKind::Rasl);
+        assert_eq!(info.random_access, RandomAccessKind::None);
+    }
+
+    #[test]
+    fn parses_h264_annex_b_access_unit_info() {
+        let codec_params = VideoCodecParameters::builder("h264").unwrap().build();
+        let packet = PacketMut::from([0u8, 0, 1, 0x65]).freeze();
+
+        let info = packet.video_access_unit_info(&codec_params).unwrap();
+        assert_eq!(info.codec, VideoCodecKind::H264);
+        assert_eq!(info.random_access, RandomAccessKind::Idr);
+        assert_eq!(info.leading_picture, LeadingPictureKind::None);
+    }
+}

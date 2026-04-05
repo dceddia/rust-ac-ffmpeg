@@ -749,7 +749,6 @@ impl From<VideoCodecParameters> for VideoCodecParametersBuilder {
 }
 
 /// Video codec parameters.
-#[derive(Clone)]
 pub struct VideoCodecParameters {
     inner: InnerCodecParameters,
 }
@@ -845,6 +844,14 @@ impl AsRef<InnerCodecParameters> for VideoCodecParameters {
 impl From<InnerCodecParameters> for VideoCodecParameters {
     fn from(params: InnerCodecParameters) -> Self {
         Self { inner: params }
+    }
+}
+
+impl Clone for VideoCodecParameters {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 

@@ -21,7 +21,7 @@ use crate::{
     format::stream::Stream,
     packet::Packet,
     reorder_buffer::ReorderBuffer,
-    time::TimeBase,
+    time::{TimeBase, Timestamp},
     Error,
 };
 
@@ -460,6 +460,10 @@ impl Decoder for VideoDecoder {
     }
 
     fn flush_buffers(&mut self) {
+        if let Some(buf) = &mut self.reorder_buffer {
+            buf.clear();
+        }
+
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.flush_buffers();
@@ -468,34 +472,72 @@ impl Decoder for VideoDecoder {
         unsafe { super::ffw_decoder_flush_buffers(self.ptr) }
     }
 
+    /// Pull a decoded frame through the reorder buffer.
+    /// If a new frame is available from the decoder, it goes into the buffer.
+    /// Returns the earliest-PTS frame when the buffer is full.
     fn take(&mut self) -> Result<Option<VideoFrame>, Error> {
         if self.reorder_buffer.is_none() {
             return self.take_frame_inner();
         }
 
-        match self.take_frame_inner()? {
-            None => Ok(None),
-            Some(frame) => {
-                let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
-                if !reorder_buffer.is_full() {
-                    reorder_buffer.push(frame);
-                } else {
-                    panic!("reorder buffer should not be full yet");
-                }
+        let new_frame = self.take_frame_inner()?;
+        let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
 
-                // If it's full, reordering is done and we're ready to pop a frame.
-                // If not, we need to wait for more frames.
-                if reorder_buffer.is_full() {
-                    Ok(reorder_buffer.pop())
-                } else {
-                    Ok(None)
-                }
+        if let Some(frame) = new_frame {
+            if reorder_buffer.is_full() {
+                panic!("reorder buffer should not be full yet");
             }
+            let _ = reorder_buffer.push(frame);
+        }
+
+        if reorder_buffer.is_full() {
+            Ok(reorder_buffer.pop())
+        } else {
+            Ok(None)
         }
     }
 }
 
 impl VideoDecoder {
+    /// Pull a decoded frame and check if the target PTS is in the reorder buffer.
+    /// If found, returns it immediately (skipping the fullness requirement).
+    /// If not found but the buffer is full, returns the earliest frame.
+    /// Used for fast first-frame-after-seek.
+    pub fn take_with_target(&mut self, target: Timestamp) -> Result<Option<VideoFrame>, Error> {
+        if self.reorder_buffer.is_none() {
+            return self.take_frame_inner();
+        }
+
+        let new_frame = self.take_frame_inner()?;
+        let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
+
+        if let Some(frame) = new_frame {
+            if reorder_buffer.is_full() {
+                panic!("reorder buffer should not be full yet");
+            }
+            let _ = reorder_buffer.push(frame);
+        }
+
+        // Check for the target first
+        // println!(
+        //     "take_with_target: target={}/{} buf_len={} buf_pts={:?}",
+        //     target.timestamp() * target.time_base().num() as i64,
+        //     target.time_base().den(),
+        //     reorder_buffer.len(),
+        //     reorder_buffer.pts_values(),
+        // );
+        if let Some(frame) = reorder_buffer.take_by_pts(target) {
+            return Ok(Some(frame));
+        }
+
+        // Fall back to normal behavior
+        if reorder_buffer.is_full() {
+            Ok(reorder_buffer.pop())
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get a frame from the underlying decoder
     fn take_frame_inner(&mut self) -> Result<Option<VideoFrame>, Error> {
         #[cfg(target_os = "macos")]

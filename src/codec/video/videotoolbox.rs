@@ -53,6 +53,7 @@ extern "C" {
         params: *const c_void,
     ) -> i32;
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
+    pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
 }
 
@@ -163,11 +164,14 @@ impl VTDecoder {
     }
 
     pub fn try_flush(&mut self) -> Result<(), CodecError> {
+        // Push an empty packet
+        // note, later on: This does NOT work. It fails, and doesn't act like a "done" signal like I hoped.
+        // let packet = crate::packet::PacketMut::new(0)
+        //     .with_time_base(self.time_base)
+        //     .freeze();
+        // self.decode_frame(packet);
         unsafe { vt_decoder_flush(self.vt_decoder_ptr) };
         Ok(())
-        // Push an empty packet
-        // let packet = PacketMut::new(0).with_time_base(self.time_base).freeze();
-        // self.decode_frame(packet)
     }
 
     /// Can this decoder be reused to decode another stream?
@@ -191,10 +195,7 @@ impl VTDecoder {
                 Ok(Some(decoded_frame))
             }
             Ok(DecodeResult::Error { status, pts }) => {
-                warn!(
-                    "VideoToolbox decode error: status={} pts={}",
-                    status, pts
-                );
+                warn!("VideoToolbox decode error: status={} pts={}", status, pts);
                 Err(Error::new(format!(
                     "Hardware decode error: status={} pts={}",
                     status, pts
@@ -210,21 +211,11 @@ impl VTDecoder {
     }
 
     pub fn flush_buffers(&mut self) {
-        debug!("VideoToolbox: flushing decoder");
-        let _ = self.try_flush();
-        let mut flushed_frames = 0;
-        let mut flushed_errors = 0;
-        while let Ok(result) = self.frame_rx.try_recv() {
-            match result {
-                DecodeResult::Frame(_) => flushed_frames += 1,
-                DecodeResult::Error { .. } => flushed_errors += 1,
-                DecodeResult::Skipped { .. } => {}
-            }
-        }
-        debug!(
-            "VideoToolbox: flushed {} frames, {} errors",
-            flushed_frames, flushed_errors
-        );
+        debug!("VideoToolbox: flush_buffers (reset)");
+        // Bump generation and wait — callback will drop stale frames.
+        unsafe { vt_decoder_flush_buffers(self.vt_decoder_ptr) };
+        // Drain anything that made it into the channel before the generation bump.
+        while self.frame_rx.try_recv().is_ok() {}
     }
 }
 
