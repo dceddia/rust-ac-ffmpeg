@@ -1,57 +1,15 @@
 //! Frame reordering buffer for proper presentation timestamp ordering.
-
-use std::{cmp::Ordering, collections::BinaryHeap};
+//!
+//! Uses a simple Vec since the buffer is typically 2-3 frames.
 
 use crate::{codec::video::VideoFrame, time::Timestamp};
 
-/// A wrapper around VideoFrame that implements reverse ordering for use in BinaryHeap.
-/// BinaryHeap is a max-heap, but we want min-heap behavior (earliest PTS first).
-#[derive(Clone)]
-struct OrderedFrame {
-    frame: VideoFrame,
-}
-
-impl OrderedFrame {
-    fn new(frame: VideoFrame) -> Self {
-        Self { frame }
-    }
-
-    fn pts(&self) -> Timestamp {
-        self.frame.pts()
-    }
-}
-
-impl PartialEq for OrderedFrame {
-    fn eq(&self, other: &Self) -> bool {
-        self.pts() == other.pts()
-    }
-}
-
-impl Eq for OrderedFrame {}
-
-impl PartialOrd for OrderedFrame {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for OrderedFrame {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering for min-heap behavior in BinaryHeap (max-heap)
-        other
-            .pts()
-            .partial_cmp(&self.pts())
-            .unwrap_or(Ordering::Equal)
-    }
-}
-
 /// A buffer for reordering video frames by presentation timestamp.
 ///
-/// This buffer collects frames until it reaches capacity, then outputs
-/// them in PTS order. This is useful for handling B-frames and other
-/// out-of-order frame scenarios.
+/// Collects frames until it reaches capacity, then outputs them in PTS order.
+/// This handles B-frames and other out-of-order decode scenarios.
 pub struct ReorderBuffer {
-    heap: BinaryHeap<OrderedFrame>,
+    frames: Vec<VideoFrame>,
     capacity: usize,
 }
 
@@ -59,7 +17,7 @@ impl ReorderBuffer {
     /// Create a new reorder buffer with the specified capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
-            heap: BinaryHeap::with_capacity(capacity),
+            frames: Vec::with_capacity(capacity),
             capacity,
         }
     }
@@ -69,30 +27,19 @@ impl ReorderBuffer {
         self.capacity
     }
 
-    /// Resize the buffer capacity.
-    ///
-    /// If the new capacity is smaller than the current number of frames,
-    /// this will not remove any frames but future pushes may fail.
-    pub fn resize(&mut self, new_capacity: usize) {
-        self.capacity = new_capacity;
-        if new_capacity > self.heap.capacity() {
-            self.heap.reserve(new_capacity - self.heap.capacity());
-        }
-    }
-
     /// Check if the buffer is empty.
     pub fn is_empty(&self) -> bool {
-        self.heap.is_empty()
+        self.frames.is_empty()
     }
 
     /// Check if the buffer is full.
     pub fn is_full(&self) -> bool {
-        self.heap.len() >= self.capacity
+        self.frames.len() >= self.capacity
     }
 
     /// Get the current number of frames in the buffer.
     pub fn len(&self) -> usize {
-        self.heap.len()
+        self.frames.len()
     }
 
     /// Push a frame into the buffer.
@@ -103,39 +50,70 @@ impl ReorderBuffer {
             return Err(frame);
         }
 
-        self.heap.push(OrderedFrame::new(frame));
+        self.frames.push(frame);
         Ok(())
     }
 
     /// Pop the frame with the earliest PTS from the buffer.
     ///
     /// Returns `None` if the buffer is empty.
-    ///
-    /// For reordering to work properly, check is_full() is true before popping.
     pub fn pop(&mut self) -> Option<VideoFrame> {
-        self.heap.pop().map(|ordered| ordered.frame)
+        if self.frames.is_empty() {
+            return None;
+        }
+
+        let min_idx = self.index_of_min_pts();
+        Some(self.frames.swap_remove(min_idx))
     }
 
     /// Peek at the frame with the earliest PTS without removing it.
     ///
     /// Returns `None` if the buffer is empty.
     pub fn peek(&self) -> Option<&VideoFrame> {
-        self.heap.peek().map(|ordered| &ordered.frame)
+        if self.frames.is_empty() {
+            return None;
+        }
+
+        let min_idx = self.index_of_min_pts();
+        Some(&self.frames[min_idx])
+    }
+
+    /// Remove and return a frame with the given PTS, if present.
+    pub fn take_by_pts(&mut self, target: Timestamp) -> Option<VideoFrame> {
+        let idx = self.frames.iter().position(|f| f.pts() == target)?;
+        Some(self.frames.swap_remove(idx))
     }
 
     /// Clear all frames from the buffer.
     pub fn clear(&mut self) {
-        self.heap.clear();
+        self.frames.clear();
     }
 
     /// Get all frames in PTS order, clearing the buffer.
-    /// This is useful for flushing at the end of a stream.
     pub fn drain(&mut self) -> Vec<VideoFrame> {
-        let mut frames = Vec::with_capacity(self.heap.len());
+        let mut frames = Vec::with_capacity(self.frames.len());
         while let Some(frame) = self.pop() {
             frames.push(frame);
         }
         frames
+    }
+
+    /// Debug helper: return all PTS values currently in the buffer.
+    pub fn pts_values(&self) -> Vec<i64> {
+        self.frames.iter().map(|f| f.pts().timestamp()).collect()
+    }
+
+    fn index_of_min_pts(&self) -> usize {
+        self.frames
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                a.pts()
+                    .partial_cmp(&b.pts())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     }
 }
 
@@ -191,20 +169,23 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_buffer_resize() {
-        let mut buffer = ReorderBuffer::new(2);
+    fn test_reorder_buffer_take_by_pts() {
+        let mut buffer = ReorderBuffer::new(3);
 
+        buffer.push(create_test_frame(300)).unwrap();
         buffer.push(create_test_frame(100)).unwrap();
         buffer.push(create_test_frame(200)).unwrap();
-        assert!(buffer.is_full());
 
-        buffer.resize(4);
-        assert!(!buffer.is_full());
-        assert_eq!(buffer.capacity(), 4);
+        // Take a specific PTS
+        let frame = buffer.take_by_pts(Timestamp::new(200, TimeBase::MICROSECONDS));
+        assert!(frame.is_some());
+        assert_eq!(frame.unwrap().pts().timestamp(), 200);
+        assert_eq!(buffer.len(), 2);
 
-        buffer.push(create_test_frame(150)).unwrap();
-        buffer.push(create_test_frame(250)).unwrap();
-        assert!(buffer.is_full());
+        // Missing PTS returns None
+        let frame = buffer.take_by_pts(Timestamp::new(999, TimeBase::MICROSECONDS));
+        assert!(frame.is_none());
+        assert_eq!(buffer.len(), 2);
     }
 
     #[test]
