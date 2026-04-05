@@ -27,6 +27,7 @@ typedef struct VTHWFrame {
 
 static void vthw_buffer_release(void *opaque, uint8_t *data)
 {
+    (void)opaque;
     VTHWFrame *ref = (VTHWFrame *)data;
     if (ref->pixbuf)
         CVPixelBufferRelease(ref->pixbuf);

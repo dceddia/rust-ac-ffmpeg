@@ -15,8 +15,8 @@ typedef struct FrameScaler {
     int align;
 
     // Track the last color info we configured, to avoid reconfiguring every frame
-    int last_colorspace;
-    int last_color_range;
+    enum AVColorSpace last_colorspace;
+    enum AVColorRange last_color_range;
 } FrameScaler;
 
 FrameScaler* ffw_frame_scaler_new(
@@ -64,8 +64,8 @@ FrameScaler* ffw_frame_scaler_new(
     res->align = align;
 
     // Initialize color tracking to -1 to force first-frame configuration
-    res->last_colorspace = -1;
-    res->last_color_range = -1;
+    res->last_colorspace = AVCOL_SPC_UNSPECIFIED;
+    res->last_color_range = AVCOL_RANGE_UNSPECIFIED;
 
     res->scale_context = sws_getContext(
         swidth, sheight, sformat,

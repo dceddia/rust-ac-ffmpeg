@@ -98,7 +98,7 @@ int ffw_stream_get_index_entries_count(const AVStream* stream) {
 }
 
 int ffw_stream_get_index_entry(const AVStream* stream, int idx, int64_t* timestamp, int* keyframe) {
-    const AVIndexEntry* entry = avformat_index_get_entry(stream, idx);
+    const AVIndexEntry* entry = avformat_index_get_entry((AVStream*)stream, idx);
     if (!entry) return -1;
     *timestamp = entry->timestamp;
     *keyframe = (entry->flags & AVINDEX_KEYFRAME) ? 1 : 0;
