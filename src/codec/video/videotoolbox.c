@@ -91,35 +91,6 @@ static void dict_set_object(CFMutableDictionaryRef dict, CFStringRef key, CFType
     CFDictionarySetValue(dict, key, value);
 }
 
-// Check if an existing decoder's params match some other set of params
-int vt_decoder_can_decode_params(VTDecoder *existing_decoder, AVCodecParameters *params) {
-    if (!existing_decoder || !params) {
-        return 0;
-    }
-
-    if (existing_decoder->params->width != params->width || existing_decoder->params->height != params->height) {
-        printf("vt_decoder_can_decode_params: width or height mismatch %dx%d vs %dx%d\n", existing_decoder->params->width, existing_decoder->params->height, params->width, params->height);
-        return 0;
-    }
-
-    if (existing_decoder->params->extradata_size != params->extradata_size) {
-        printf("vt_decoder_can_decode_params: extradata size mismatch\n");
-        return 0;
-    }
-
-    if (memcmp(existing_decoder->params->extradata, params->extradata, params->extradata_size) != 0) {
-        printf("vt_decoder_can_decode_params: extradata mismatch\n");
-        return 0;
-    }
-
-    if (existing_decoder->params->codec_id != params->codec_id) {
-        printf("vt_decoder_can_decode_params: codec ID mismatch\n");
-        return 0;
-    }
-
-    return 1;
-}
-
 VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callback, void *callback_context) {
     int width = params->width;
     int height = params->height;

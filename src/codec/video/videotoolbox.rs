@@ -48,10 +48,6 @@ extern "C" {
         packet: *const c_void,
         reset_decoder: i32,
     ) -> i32;
-    pub(crate) fn vt_decoder_can_decode_params(
-        existing_decoder: *mut c_void,
-        params: *const c_void,
-    ) -> i32;
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
     pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
@@ -172,11 +168,6 @@ impl VTDecoder {
         // self.decode_frame(packet);
         unsafe { vt_decoder_flush(self.vt_decoder_ptr) };
         Ok(())
-    }
-
-    /// Can this decoder be reused to decode another stream?
-    pub fn can_decode_params(&self, params: &VideoCodecParameters) -> bool {
-        unsafe { vt_decoder_can_decode_params(self.vt_decoder_ptr, params.as_ptr()) == 1 }
     }
 
     fn decode_frame(&mut self, packet: Packet) -> Result<(), CodecError> {

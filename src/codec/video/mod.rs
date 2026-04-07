@@ -369,18 +369,6 @@ impl VideoDecoder {
         }
     }
 
-    /// Can this decoder be reused to decode another stream?
-    pub fn can_decode_params(&self, params: &VideoCodecParameters) -> bool {
-        #[cfg(target_os = "macos")]
-        if let Some(vt_decoder) = &self.vt_decoder {
-            return vt_decoder.can_decode_params(params);
-        }
-
-        // For software decoders, just recreate it for now
-        // Not sure how expensive this is?
-        false
-    }
-
     pub fn clear_reorder_buffer(&mut self) {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
     }
