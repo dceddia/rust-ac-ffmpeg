@@ -262,7 +262,6 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     return 0;
 
     fail:
-        fprintf(stderr, "Failed to initialize hardware acceleration\n");
         decoder->use_hwaccel = 0;
         return -1;
 }

@@ -180,7 +180,6 @@ impl VideoDecoderBuilder {
 
     /// Try to enable hardware acceleration. If this fails, decoding will automatically fall back to software.
     pub fn enable_hardware_accel(mut self) -> Result<Self, Error> {
-        let _ = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
         self.hwaccel_enabled = true;
 
         Ok(self)
@@ -228,52 +227,47 @@ impl VideoDecoderBuilder {
     /// 2. FFmpeg's built-in hwaccel (already configured on self.ptr)
     /// 3. Pure software decoding (rebuild without hwaccel)
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
-        // Decide strategy based on flags and platform
-        #[cfg(target_os = "macos")]
-        let try_custom_vt = self.hwaccel_enabled;
-        #[cfg(not(target_os = "macos"))]
-        let try_custom_vt = false;
+        // Open the FFmpeg decoder (used for codec_parameters + hwaccel config below)
+        if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
+            return Err(Error::new("unable to open FFmpeg decoder context"));
+        }
 
-        // Step 1: Try custom VTDecoder
         #[cfg(target_os = "macos")]
-        if try_custom_vt {
+        if self.hwaccel_enabled {
             let params = self.codec_parameters();
             match videotoolbox::VTDecoder::new(&params, self.time_base) {
                 Ok(decoder) => {
                     self.vt_decoder = Some(decoder);
-                    // Still need to open the FFmpeg decoder (used for codec_parameters, reorder buffer, etc.)
-                    if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
-                        return Err(Error::new("unable to open FFmpeg decoder context"));
-                    }
                     return self.finish_build();
                 }
                 Err(e) => {
-                    warn!("Custom VT decoder failed: {}; trying FFmpeg hwaccel", e);
+                    warn!("VTDecoder init failed: {}", e);
                 }
             }
         }
 
-        // Step 2: FFmpeg decoder (with hwaccel already configured if enable_hardware_accel was called)
-        if unsafe { super::ffw_decoder_open(self.ptr) } == 0 {
-            return self.finish_build();
-        }
-
-        // Step 3: If hwaccel was enabled and FFmpeg failed to open, retry without hwaccel
+        #[cfg(target_os = "windows")]
         if self.hwaccel_enabled {
-            warn!("FFmpeg hwaccel decoder failed to open; trying pure software");
-            let params = self.codec_parameters();
-            unsafe { super::ffw_decoder_free(self.ptr) };
-            self.ptr = ptr::null_mut();
-
-            let mut builder = VideoDecoderBuilder::from_codec_parameters(&params)?;
-            builder = builder.time_base(self.time_base).rotation(self.rotation);
-            if self.enable_reordering {
-                builder = builder.enable_reordering();
+            let ret = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
+            if ret != 0 {
+                warn!("hwaccel init failed: {}", ret);
+            } else {
+                return self.finish_build();
             }
-            return builder.build();
         }
 
-        Err(Error::new("unable to build the decoder"))
+        // If hwaccel failed or was not requested, try again with it disabled
+        let params = self.codec_parameters();
+        unsafe { super::ffw_decoder_free(self.ptr) };
+        self.ptr = ptr::null_mut();
+
+        let mut builder = VideoDecoderBuilder::from_codec_parameters(&params)?;
+        builder = builder.time_base(self.time_base).rotation(self.rotation);
+        if self.enable_reordering {
+            builder = builder.enable_reordering();
+        }
+
+        return builder.finish_build();
     }
 
     fn finish_build(mut self) -> Result<VideoDecoder, Error> {
