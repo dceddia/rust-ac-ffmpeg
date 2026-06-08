@@ -9,11 +9,13 @@ pub mod scaler;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 
-use log::warn;
+use log::{info, warn};
 use std::{
+    env,
     ffi::{CStr, CString},
     os::raw::c_void,
     ptr,
+    sync::OnceLock,
 };
 
 use crate::{
@@ -36,6 +38,13 @@ pub use self::{
 use super::ThreadType;
 
 pub use self::color::*;
+
+const REORDER_BUFFER_CAPACITY: usize = 8;
+
+fn reorder_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var_os("RECUT_DEBUG_REORDER").is_some())
+}
 
 /// Builder for the video decoder.
 pub struct VideoDecoderBuilder {
@@ -275,12 +284,30 @@ impl VideoDecoderBuilder {
 
         let reorder_buffer = if self.enable_reordering {
             let b_frames = unsafe { super::ffw_decoder_get_b_frames(self.ptr) };
-            if b_frames > 0 {
-                // +1 because ffmpeg's has_b_frames is 1 less than the size of the reorder buffer
-                Some(ReorderBuffer::new((b_frames + 1) as usize))
-            } else {
-                None
+            if reorder_debug_enabled() {
+                info!(
+                    "VideoDecoder reorder enabled: has_b_frames={} capacity={} hw={}",
+                    b_frames,
+                    REORDER_BUFFER_CAPACITY,
+                    {
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.vt_decoder.is_some()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            false
+                        }
+                    }
+                );
             }
+            // `AVCodecContext::has_b_frames` is not a reliable source of truth for the
+            // actual reorder depth required by a stream. We observed files reporting
+            // `has_b_frames=1` while the frame pattern still contained longer B-frame runs,
+            // and also decoder contexts reporting `has_b_frames=0` at build time for streams
+            // that clearly contain B-frames once decoding starts. When reordering is enabled,
+            // use a conservative fixed capacity immediately instead of trusting that field.
+            Some(ReorderBuffer::new(REORDER_BUFFER_CAPACITY))
         } else {
             None
         };
@@ -292,6 +319,7 @@ impl VideoDecoderBuilder {
             time_base: self.time_base,
             rotation: self.rotation,
             reorder_buffer,
+            last_reordered_pts: None,
 
             #[cfg(target_os = "macos")]
             vt_decoder: self.vt_decoder.take(),
@@ -318,12 +346,48 @@ pub struct VideoDecoder {
 
     /// Frame reordering buffer for handling out-of-order frames (B-frames).
     reorder_buffer: Option<ReorderBuffer>,
+    last_reordered_pts: Option<Timestamp>,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
 }
 
 impl VideoDecoder {
+    fn record_reordered_frame(&mut self, frame: &VideoFrame, reason: &str, remaining: &[i64]) {
+        if let Some(last_pts) = self.last_reordered_pts {
+            if frame.pts() < last_pts {
+                info!(
+                    "reorder emitted non-monotonic pts previous={} current={} reason={} remaining={:?}",
+                    last_pts.timestamp(),
+                    frame.pts().timestamp(),
+                    reason,
+                    remaining
+                );
+            }
+        }
+        self.last_reordered_pts = Some(frame.pts());
+
+        if reorder_debug_enabled() {
+            info!(
+                "reorder emit reason={} pts={} remaining={:?}",
+                reason,
+                frame.pts().timestamp(),
+                remaining
+            );
+        }
+    }
+
+    fn pop_reordered_frame(&mut self, reason: &str) -> Option<VideoFrame> {
+        let (frame, remaining) = {
+            let buf = self.reorder_buffer.as_mut()?;
+            let frame = buf.pop()?;
+            let remaining = buf.pts_values();
+            (frame, remaining)
+        };
+        self.record_reordered_frame(&frame, reason, &remaining);
+        Some(frame)
+    }
+
     /// Create a new video decoder for a given codec.
     pub fn new(codec: &str) -> Result<Self, Error> {
         VideoDecoderBuilder::new(codec).and_then(|builder| builder.build())
@@ -371,6 +435,19 @@ impl VideoDecoder {
 
     pub fn clear_reorder_buffer(&mut self) {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
+        self.last_reordered_pts = None;
+    }
+
+    pub fn uses_videotoolbox(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.vt_decoder.is_some()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
@@ -442,9 +519,7 @@ impl Decoder for VideoDecoder {
     }
 
     fn flush_buffers(&mut self) {
-        if let Some(buf) = &mut self.reorder_buffer {
-            buf.clear();
-        }
+        self.clear_reorder_buffer();
 
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
@@ -469,11 +544,20 @@ impl Decoder for VideoDecoder {
             if reorder_buffer.is_full() {
                 panic!("reorder buffer should not be full yet");
             }
+            if reorder_debug_enabled() {
+                info!(
+                    "reorder recv pts={} len_before={} buf={:?}",
+                    frame.pts().timestamp(),
+                    reorder_buffer.len(),
+                    reorder_buffer.pts_values()
+                );
+            }
             let _ = reorder_buffer.push(frame);
         }
 
-        if reorder_buffer.is_full() {
-            Ok(reorder_buffer.pop())
+        let buffer_full = reorder_buffer.is_full();
+        if buffer_full {
+            Ok(self.pop_reordered_frame("buffer_full"))
         } else {
             Ok(None)
         }
@@ -497,6 +581,15 @@ impl VideoDecoder {
             if reorder_buffer.is_full() {
                 panic!("reorder buffer should not be full yet");
             }
+            if reorder_debug_enabled() {
+                info!(
+                    "reorder recv pts={} len_before={} target={} buf={:?}",
+                    frame.pts().timestamp(),
+                    reorder_buffer.len(),
+                    target.timestamp(),
+                    reorder_buffer.pts_values()
+                );
+            }
             let _ = reorder_buffer.push(frame);
         }
 
@@ -509,12 +602,15 @@ impl VideoDecoder {
         //     reorder_buffer.pts_values(),
         // );
         if let Some(frame) = reorder_buffer.take_by_pts(target) {
+            let remaining = reorder_buffer.pts_values();
+            self.record_reordered_frame(&frame, "target_hit", &remaining);
             return Ok(Some(frame));
         }
 
         // Fall back to normal behavior
-        if reorder_buffer.is_full() {
-            Ok(reorder_buffer.pop())
+        let buffer_full = reorder_buffer.is_full();
+        if buffer_full {
+            Ok(self.pop_reordered_frame("buffer_full"))
         } else {
             Ok(None)
         }
