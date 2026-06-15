@@ -14,6 +14,7 @@ use std::{
 use crate::{
     codec::AVFrame,
     time::{TimeBase, Timestamp},
+    Error,
 };
 
 use super::pixel::AVPixelFormat;
@@ -877,16 +878,26 @@ impl VideoFrame {
     ///
     /// It can fail if there's not enough memory, and in the case of failure,
     /// the original frame is left unchanged.
-    pub fn copy_to_software(&mut self) {
+    pub fn try_copy_to_software(&mut self) -> Result<(), Error> {
         unsafe {
             let sw_frame = ffw_frame_from_hardware(self.ptr);
             if sw_frame.is_null() {
-                panic!("unable to allocate memory for software frame");
+                return Err(Error::new("unable to copy hardware frame to system memory"));
             }
 
             let old_frame = std::mem::replace(&mut self.ptr, sw_frame);
             ffw_frame_free(old_frame);
         }
+
+        Ok(())
+    }
+
+    /// Copy this hardware-backed frame to system memory.
+    ///
+    /// Panics if the transfer fails. Prefer `try_copy_to_software` in production paths.
+    pub fn copy_to_software(&mut self) {
+        self.try_copy_to_software()
+            .expect("unable to copy hardware frame to system memory");
     }
 
     /// Get the fourth data pointer, which holds a CVPixelBufferRef on macOS
