@@ -220,9 +220,13 @@ impl VideoFrameScaler {
             return Err(Error::new("unable to scale a frame - out of memory?"));
         }
 
-        let frame = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) };
+        // swscale carries the source PTS through, but `from_raw_ptr` derives the new
+        // frame's original_pts from that PTS. Preserve the source's original_pts so it
+        // survives scaling (e.g. a held VFR frame keeps its source timestamp).
+        let scaled = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) }
+            .with_original_pts(frame.original_pts());
 
-        Ok(frame)
+        Ok(scaled)
     }
 }
 

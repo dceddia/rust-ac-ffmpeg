@@ -940,9 +940,19 @@ impl VideoFrame {
         self
     }
 
-    /// Get original presentation timestamp. This is immutable.
+    /// Get original presentation timestamp.
     pub fn original_pts(&self) -> Timestamp {
         self.original_pts
+    }
+
+    /// Override the original presentation timestamp.
+    ///
+    /// Derived frames (e.g. the output of scaling) otherwise adopt their own
+    /// current PTS as their original PTS, losing the source frame's. Use this to
+    /// preserve the source's original PTS across such transforms.
+    pub fn with_original_pts(mut self, original_pts: Timestamp) -> Self {
+        self.original_pts = original_pts;
+        self
     }
 
     /// Get presentation timestamp.
