@@ -329,7 +329,7 @@ int ffw_frame_get_repeat_pict(AVFrame *frame) {
 }
 
 int ffw_frame_is_hardware(AVFrame *frame) {
-    return frame->hw_frames_ctx != NULL || frame->data[3] != NULL;
+    return frame->hw_frames_ctx != NULL;
 }
 
 // Get sample aspect ratio from frame
