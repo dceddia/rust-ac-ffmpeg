@@ -437,6 +437,7 @@ impl VideoDecoderBuilder {
             rotation: self.rotation,
             reorder_buffer,
             last_reordered_pts: None,
+            draining: false,
             decode_backend: self.decode_backend,
 
             #[cfg(target_os = "macos")]
@@ -465,6 +466,10 @@ pub struct VideoDecoder {
     /// Frame reordering buffer for handling out-of-order frames (B-frames).
     reorder_buffer: Option<ReorderBuffer>,
     last_reordered_pts: Option<Timestamp>,
+    /// Set once the decoder has been flushed (EOF signalled). While draining,
+    /// `take()` empties the reorder buffer even when it is not full so the final
+    /// frames are not stranded. Reset when new packets are pushed or buffers cleared.
+    draining: bool,
     decode_backend: DecodeBackend,
 
     #[cfg(target_os = "macos")]
@@ -555,6 +560,7 @@ impl VideoDecoder {
     pub fn clear_reorder_buffer(&mut self) {
         self.reorder_buffer.as_mut().map(|buf| buf.clear());
         self.last_reordered_pts = None;
+        self.draining = false;
     }
 
     pub fn decode_backend(&self) -> DecodeBackend {
@@ -594,6 +600,9 @@ impl Decoder for VideoDecoder {
     }
 
     fn try_push(&mut self, packet: Packet) -> Result<(), CodecError> {
+        // A new packet means we're no longer at EOF: leave drain mode.
+        self.draining = false;
+
         let packet = packet.with_time_base(self.time_base);
 
         #[cfg(target_os = "macos")]
@@ -613,6 +622,10 @@ impl Decoder for VideoDecoder {
     }
 
     fn try_flush(&mut self) -> Result<(), CodecError> {
+        // EOF: once the decoder has been flushed, `take()` should drain any frames
+        // still held in the reorder buffer rather than waiting for it to fill.
+        self.draining = true;
+
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.try_flush();
@@ -648,7 +661,9 @@ impl Decoder for VideoDecoder {
             return self.take_frame_inner();
         }
 
+        let draining = self.draining;
         let new_frame = self.take_frame_inner()?;
+        let decoder_exhausted = new_frame.is_none();
         let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
 
         if let Some(frame) = new_frame {
@@ -666,9 +681,14 @@ impl Decoder for VideoDecoder {
             let _ = reorder_buffer.push(frame);
         }
 
-        let buffer_full = reorder_buffer.is_full();
-        if buffer_full {
+        if reorder_buffer.is_full() {
             Ok(self.pop_reordered_frame("buffer_full"))
+        } else if draining && decoder_exhausted {
+            // EOF reached and the underlying decoder is fully drained, so empty the
+            // reorder buffer one frame at a time (earliest PTS first) instead of
+            // waiting for it to fill. Otherwise the final `capacity - 1` frames stay
+            // stuck in the buffer and playback ends early.
+            Ok(self.pop_reordered_frame("drain"))
         } else {
             Ok(None)
         }
@@ -685,7 +705,9 @@ impl VideoDecoder {
             return self.take_frame_inner();
         }
 
+        let draining = self.draining;
         let new_frame = self.take_frame_inner()?;
+        let decoder_exhausted = new_frame.is_none();
         let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
 
         if let Some(frame) = new_frame {
@@ -719,9 +741,13 @@ impl VideoDecoder {
         }
 
         // Fall back to normal behavior
-        let buffer_full = reorder_buffer.is_full();
-        if buffer_full {
+        if reorder_buffer.is_full() {
             Ok(self.pop_reordered_frame("buffer_full"))
+        } else if draining && decoder_exhausted {
+            // EOF reached and the underlying decoder is fully drained: empty the
+            // reorder buffer one frame at a time instead of stranding the final
+            // `capacity - 1` frames. See `take()` for the full rationale.
+            Ok(self.pop_reordered_frame("drain"))
         } else {
             Ok(None)
         }
