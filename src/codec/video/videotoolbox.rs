@@ -125,7 +125,6 @@ impl VTDecoder {
             unsafe {
                 drop(Box::from_raw(sender_ptr));
             }
-            warn!("VideoToolbox decoder creation failed");
             return Err(Error::new("Failed to create VideoToolbox decoder"));
         }
 

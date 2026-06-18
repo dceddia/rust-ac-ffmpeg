@@ -9,7 +9,7 @@ pub mod scaler;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::{
     env,
     ffi::{CStr, CString},
@@ -53,7 +53,6 @@ pub enum DecodeBackend {
     Software,
     #[cfg(target_os = "macos")]
     VideoToolbox,
-    #[cfg(target_os = "windows")]
     FfmpegHardware,
 }
 
@@ -77,6 +76,7 @@ pub struct VideoDecoderBuilder {
 
     enable_reordering: bool,
     decode_backend: DecodeBackend,
+    thread_count: Option<i32>,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
@@ -96,6 +96,7 @@ impl VideoDecoderBuilder {
             hardware_accel: HardwareAccel::Disabled,
             enable_reordering: false,
             decode_backend: DecodeBackend::Software,
+            thread_count: None,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
         }
@@ -189,7 +190,8 @@ impl VideoDecoderBuilder {
 
     /// Set the number of threads to use while decoding
     /// Default is 1. Set to 0 to let FFmpeg decide how many threads to use.
-    pub fn with_thread_count(self, count: i32) -> Self {
+    pub fn with_thread_count(mut self, count: i32) -> Self {
+        self.thread_count = Some(count);
         let _ = unsafe { super::ffw_decoder_set_thread_count(self.ptr, count) };
 
         self
@@ -251,12 +253,63 @@ impl VideoDecoderBuilder {
         self
     }
 
+    fn test_env_flag(name: &str) -> bool {
+        env::var(name)
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn copy_settings_to(&self, mut builder: VideoDecoderBuilder) -> VideoDecoderBuilder {
+        builder = builder.time_base(self.time_base).rotation(self.rotation);
+        if let Some(thread_count) = self.thread_count {
+            builder = builder.with_thread_count(thread_count);
+        }
+        if self.enable_reordering {
+            builder = builder.enable_reordering();
+        }
+        builder
+    }
+
+    fn build_software_from_params(
+        &self,
+        params: &VideoCodecParameters,
+    ) -> Result<VideoDecoder, Error> {
+        let builder = self.copy_settings_to(VideoDecoderBuilder::from_codec_parameters(params)?);
+        builder.open_and_finish()
+    }
+
+    fn build_ffmpeg_hardware_from_params(
+        &self,
+        params: &VideoCodecParameters,
+    ) -> Result<VideoDecoder, Error> {
+        if Self::test_env_flag("RECUT_SKIP_FFMPEG_HWACCEL") {
+            return Err(Error::new("FFmpeg hardware decode skipped by environment"));
+        }
+
+        let mut builder = self.copy_settings_to(VideoDecoderBuilder::from_codec_parameters(params)?);
+        let ret = unsafe { super::ffw_decoder_hwaccel_autoselect_device(builder.ptr) };
+        if ret != 0 {
+            return Err(Error::new(format!("hwaccel init failed: {}", ret)));
+        }
+        builder.decode_backend = DecodeBackend::FfmpegHardware;
+        builder.open_and_finish()
+    }
+
+    fn open_and_finish(self) -> Result<VideoDecoder, Error> {
+        if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
+            return Err(Error::new("unable to open FFmpeg decoder context"));
+        }
+
+        self.finish_build()
+    }
+
     /// Build the decoder.
     ///
     /// When hardware acceleration is optional, tries hardware first and falls back
     /// to software if hardware decoder creation fails.
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
-        // Open the FFmpeg decoder (used for codec_parameters + hwaccel config below)
+        // Open the FFmpeg decoder. The custom VideoToolbox path still keeps this
+        // context around for codec parameters and decoder metadata.
         if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
             return Err(Error::new("unable to open FFmpeg decoder context"));
         }
@@ -267,63 +320,80 @@ impl VideoDecoderBuilder {
 
         #[cfg(target_os = "macos")]
         {
-            let params = self.codec_parameters();
-            match videotoolbox::VTDecoder::new(&params, self.time_base) {
-                Ok(decoder) => {
-                    self.vt_decoder = Some(decoder);
-                    self.decode_backend = DecodeBackend::VideoToolbox;
-                    return self.finish_build();
-                }
-                Err(e) => {
-                    warn!("VTDecoder init failed: {}", e);
-                    if self.hardware_accel == HardwareAccel::Required {
-                        return Err(Error::new(format!(
-                            "unable to create required VideoToolbox decoder: {}",
-                            e
-                        )));
+            if !Self::test_env_flag("RECUT_SKIP_CUSTOM_VIDEOTOOLBOX") {
+                let params = self.codec_parameters();
+                match videotoolbox::VTDecoder::new(&params, self.time_base) {
+                    Ok(decoder) => {
+                        self.vt_decoder = Some(decoder);
+                        self.decode_backend = DecodeBackend::VideoToolbox;
+                        return self.finish_build();
+                    }
+                    Err(e) => {
+                        if self.hardware_accel == HardwareAccel::Required {
+                            warn!("Custom VideoToolbox decoder init failed: {}", e);
+                        } else {
+                            debug!("Custom VideoToolbox decoder init failed: {}", e);
+                        }
                     }
                 }
             }
-        }
 
-        #[cfg(target_os = "windows")]
-        {
-            let ret = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
-            if ret != 0 {
-                warn!("hwaccel init failed: {}", ret);
-                if self.hardware_accel == HardwareAccel::Required {
-                    return Err(Error::new(format!(
-                        "unable to create required hardware decoder: {}",
-                        ret
-                    )));
+            let params = self.codec_parameters();
+            unsafe { super::ffw_decoder_free(self.ptr) };
+            self.ptr = ptr::null_mut();
+
+            match self.build_ffmpeg_hardware_from_params(&params) {
+                Ok(decoder) => return Ok(decoder),
+                Err(e) => {
+                    if self.hardware_accel == HardwareAccel::Required {
+                        warn!("FFmpeg hardware decoder init failed: {}", e);
+                        return Err(Error::new(format!(
+                            "unable to create required hardware decoder: {}",
+                            e
+                        )));
+                    }
+                    debug!("FFmpeg hardware decoder init failed: {}", e);
+                    return self.build_software_from_params(&params);
                 }
-            } else {
-                self.decode_backend = DecodeBackend::FfmpegHardware;
-                return self.finish_build();
             }
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        if self.hardware_accel == HardwareAccel::Required {
-            return Err(Error::new("hardware decoding is not supported on this platform"));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let params = self.codec_parameters();
+
+            #[cfg(target_os = "windows")]
+            {
+                unsafe { super::ffw_decoder_free(self.ptr) };
+                self.ptr = ptr::null_mut();
+
+                match self.build_ffmpeg_hardware_from_params(&params) {
+                    Ok(decoder) => return Ok(decoder),
+                    Err(e) => {
+                        if self.hardware_accel == HardwareAccel::Required {
+                            warn!("FFmpeg hardware decoder init failed: {}", e);
+                            return Err(Error::new(format!(
+                                "unable to create required hardware decoder: {}",
+                                e
+                            )));
+                        }
+                        debug!("FFmpeg hardware decoder init failed: {}", e);
+                        return self.build_software_from_params(&params);
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                if self.hardware_accel == HardwareAccel::Required {
+                    return Err(Error::new("hardware decoding is not supported on this platform"));
+                }
+
+                unsafe { super::ffw_decoder_free(self.ptr) };
+                self.ptr = ptr::null_mut();
+                self.build_software_from_params(&params)
+            }
         }
-
-        // If optional hardware failed, try again with it disabled.
-        let params = self.codec_parameters();
-        unsafe { super::ffw_decoder_free(self.ptr) };
-        self.ptr = ptr::null_mut();
-
-        let mut builder = VideoDecoderBuilder::from_codec_parameters(&params)?;
-        builder = builder.time_base(self.time_base).rotation(self.rotation);
-        if self.enable_reordering {
-            builder = builder.enable_reordering();
-        }
-
-        if unsafe { super::ffw_decoder_open(builder.ptr) } != 0 {
-            return Err(Error::new("unable to open FFmpeg decoder context"));
-        }
-
-        builder.finish_build()
     }
 
     fn finish_build(mut self) -> Result<VideoDecoder, Error> {
