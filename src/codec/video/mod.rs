@@ -41,6 +41,28 @@ pub use self::color::*;
 
 const REORDER_BUFFER_CAPACITY: usize = 8;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HardwareAccel {
+    Disabled,
+    Optional,
+    Required,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeBackend {
+    Software,
+    #[cfg(target_os = "macos")]
+    VideoToolbox,
+    #[cfg(target_os = "windows")]
+    FfmpegHardware,
+}
+
+impl DecodeBackend {
+    pub fn is_hardware_accelerated(self) -> bool {
+        !matches!(self, Self::Software)
+    }
+}
+
 fn reorder_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var_os("RECUT_DEBUG_REORDER").is_some())
@@ -51,9 +73,10 @@ pub struct VideoDecoderBuilder {
     ptr: *mut c_void,
     time_base: TimeBase,
     rotation: f64,
-    hwaccel_enabled: bool,
+    hardware_accel: HardwareAccel,
 
     enable_reordering: bool,
+    decode_backend: DecodeBackend,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
@@ -70,8 +93,9 @@ impl VideoDecoderBuilder {
             ptr,
             time_base,
             rotation: 0.0,
-            hwaccel_enabled: false,
+            hardware_accel: HardwareAccel::Disabled,
             enable_reordering: false,
+            decode_backend: DecodeBackend::Software,
             #[cfg(target_os = "macos")]
             vt_decoder: None,
         }
@@ -187,11 +211,9 @@ impl VideoDecoderBuilder {
         self
     }
 
-    /// Try to enable hardware acceleration. If this fails, decoding will automatically fall back to software.
-    pub fn enable_hardware_accel(mut self) -> Result<Self, Error> {
-        self.hwaccel_enabled = true;
-
-        Ok(self)
+    pub fn with_hardware_accel(mut self, hardware_accel: HardwareAccel) -> Self {
+        self.hardware_accel = hardware_accel;
+        self
     }
 
     /// Get the codec parameters.
@@ -231,41 +253,62 @@ impl VideoDecoderBuilder {
 
     /// Build the decoder.
     ///
-    /// When hwaccel is enabled on macOS, tries in order:
-    /// 1. Custom VTDecoder (our VideoToolbox wrapper)
-    /// 2. FFmpeg's built-in hwaccel (already configured on self.ptr)
-    /// 3. Pure software decoding (rebuild without hwaccel)
+    /// When hardware acceleration is optional, tries hardware first and falls back
+    /// to software if hardware decoder creation fails.
     pub fn build(mut self) -> Result<VideoDecoder, Error> {
         // Open the FFmpeg decoder (used for codec_parameters + hwaccel config below)
         if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
             return Err(Error::new("unable to open FFmpeg decoder context"));
         }
 
+        if self.hardware_accel == HardwareAccel::Disabled {
+            return self.finish_build();
+        }
+
         #[cfg(target_os = "macos")]
-        if self.hwaccel_enabled {
+        {
             let params = self.codec_parameters();
             match videotoolbox::VTDecoder::new(&params, self.time_base) {
                 Ok(decoder) => {
                     self.vt_decoder = Some(decoder);
+                    self.decode_backend = DecodeBackend::VideoToolbox;
                     return self.finish_build();
                 }
                 Err(e) => {
                     warn!("VTDecoder init failed: {}", e);
+                    if self.hardware_accel == HardwareAccel::Required {
+                        return Err(Error::new(format!(
+                            "unable to create required VideoToolbox decoder: {}",
+                            e
+                        )));
+                    }
                 }
             }
         }
 
         #[cfg(target_os = "windows")]
-        if self.hwaccel_enabled {
+        {
             let ret = unsafe { super::ffw_decoder_hwaccel_autoselect_device(self.ptr) };
             if ret != 0 {
                 warn!("hwaccel init failed: {}", ret);
+                if self.hardware_accel == HardwareAccel::Required {
+                    return Err(Error::new(format!(
+                        "unable to create required hardware decoder: {}",
+                        ret
+                    )));
+                }
             } else {
+                self.decode_backend = DecodeBackend::FfmpegHardware;
                 return self.finish_build();
             }
         }
 
-        // If hwaccel failed or was not requested, try again with it disabled
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        if self.hardware_accel == HardwareAccel::Required {
+            return Err(Error::new("hardware decoding is not supported on this platform"));
+        }
+
+        // If optional hardware failed, try again with it disabled.
         let params = self.codec_parameters();
         unsafe { super::ffw_decoder_free(self.ptr) };
         self.ptr = ptr::null_mut();
@@ -276,7 +319,11 @@ impl VideoDecoderBuilder {
             builder = builder.enable_reordering();
         }
 
-        return builder.finish_build();
+        if unsafe { super::ffw_decoder_open(builder.ptr) } != 0 {
+            return Err(Error::new("unable to open FFmpeg decoder context"));
+        }
+
+        builder.finish_build()
     }
 
     fn finish_build(mut self) -> Result<VideoDecoder, Error> {
@@ -320,6 +367,7 @@ impl VideoDecoderBuilder {
             rotation: self.rotation,
             reorder_buffer,
             last_reordered_pts: None,
+            decode_backend: self.decode_backend,
 
             #[cfg(target_os = "macos")]
             vt_decoder: self.vt_decoder.take(),
@@ -347,6 +395,7 @@ pub struct VideoDecoder {
     /// Frame reordering buffer for handling out-of-order frames (B-frames).
     reorder_buffer: Option<ReorderBuffer>,
     last_reordered_pts: Option<Timestamp>,
+    decode_backend: DecodeBackend,
 
     #[cfg(target_os = "macos")]
     vt_decoder: Option<videotoolbox::VTDecoder>,
@@ -438,16 +487,8 @@ impl VideoDecoder {
         self.last_reordered_pts = None;
     }
 
-    pub fn uses_videotoolbox(&self) -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            self.vt_decoder.is_some()
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            false
-        }
+    pub fn decode_backend(&self) -> DecodeBackend {
+        self.decode_backend
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {

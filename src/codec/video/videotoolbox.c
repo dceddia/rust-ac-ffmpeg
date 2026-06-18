@@ -140,7 +140,6 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
             extradataAtomName = "avcC";
             break;
         default:
-            printf("Error: Unsupported codec ID %d for VideoToolbox decoding\n", params->codec_id);
             avcodec_parameters_free(&params_copy);
             free(decoder);
             return NULL;
