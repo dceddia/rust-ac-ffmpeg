@@ -179,24 +179,32 @@ impl VTDecoder {
     }
 
     pub fn take_frame(&mut self) -> Result<Option<DecodedFrame>, Error> {
-        match self.frame_rx.try_recv() {
-            Ok(DecodeResult::Frame(decoded_frame)) => {
-                trace!("VideoToolbox: got frame from channel");
-                Ok(Some(decoded_frame))
+        // Consume any number of DoNotDisplay markers and return the next real frame.
+        // Returning `None` on a skip would be indistinguishable from an empty channel,
+        // which prematurely ends draining at EOF (a skip can sit ahead of real frames
+        // still queued behind it). Only a truly empty channel means "no frame".
+        loop {
+            match self.frame_rx.try_recv() {
+                Ok(DecodeResult::Frame(decoded_frame)) => {
+                    trace!("VideoToolbox: got frame from channel");
+                    return Ok(Some(decoded_frame));
+                }
+                Ok(DecodeResult::Error { status, pts }) => {
+                    warn!("VideoToolbox decode error: status={} pts={}", status, pts);
+                    return Err(Error::new(format!(
+                        "Hardware decode error: status={} pts={}",
+                        status, pts
+                    )));
+                }
+                Ok(DecodeResult::Skipped { pts: _ }) => {
+                    // DoNotDisplay frame - not an error and not a frame; keep looking.
+                    continue;
+                }
+                Err(TryRecvError::Empty) => return Ok(None),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(Error::new("Receiver disconnected"))
+                }
             }
-            Ok(DecodeResult::Error { status, pts }) => {
-                warn!("VideoToolbox decode error: status={} pts={}", status, pts);
-                Err(Error::new(format!(
-                    "Hardware decode error: status={} pts={}",
-                    status, pts
-                )))
-            }
-            Ok(DecodeResult::Skipped { pts: _ }) => {
-                // DoNotDisplay frame - not an error, just no frame to return
-                Ok(None)
-            }
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(Error::new("Receiver disconnected")),
         }
     }
 

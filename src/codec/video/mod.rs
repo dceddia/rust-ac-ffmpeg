@@ -661,9 +661,16 @@ impl Decoder for VideoDecoder {
             return self.take_frame_inner();
         }
 
-        let draining = self.draining;
+        // After the decoder has been flushed (EOF), there are no more packets to
+        // grow the buffer to fullness. Pull everything the decoder still holds into
+        // the reorder buffer and emit it in PTS order, otherwise the final frames
+        // stay stuck and playback ends early.
+        if self.draining {
+            self.fill_reorder_buffer()?;
+            return Ok(self.pop_reordered_frame("drain"));
+        }
+
         let new_frame = self.take_frame_inner()?;
-        let decoder_exhausted = new_frame.is_none();
         let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
 
         if let Some(frame) = new_frame {
@@ -683,12 +690,6 @@ impl Decoder for VideoDecoder {
 
         if reorder_buffer.is_full() {
             Ok(self.pop_reordered_frame("buffer_full"))
-        } else if draining && decoder_exhausted {
-            // EOF reached and the underlying decoder is fully drained, so empty the
-            // reorder buffer one frame at a time (earliest PTS first) instead of
-            // waiting for it to fill. Otherwise the final `capacity - 1` frames stay
-            // stuck in the buffer and playback ends early.
-            Ok(self.pop_reordered_frame("drain"))
         } else {
             Ok(None)
         }
@@ -705,9 +706,22 @@ impl VideoDecoder {
             return self.take_frame_inner();
         }
 
-        let draining = self.draining;
+        // At EOF (post-flush) there are no more packets to fill the buffer, so pull
+        // everything the decoder still holds before looking for the target. Without
+        // this, a seek landing on one of the last frames returns nothing (the target
+        // is never pulled in) or stops after a single frame. See `take()`.
+        if self.draining {
+            self.fill_reorder_buffer()?;
+            let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
+            if let Some(frame) = reorder_buffer.take_by_pts(target) {
+                let remaining = reorder_buffer.pts_values();
+                self.record_reordered_frame(&frame, "target_hit", &remaining);
+                return Ok(Some(frame));
+            }
+            return Ok(self.pop_reordered_frame("drain"));
+        }
+
         let new_frame = self.take_frame_inner()?;
-        let decoder_exhausted = new_frame.is_none();
         let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
 
         if let Some(frame) = new_frame {
@@ -727,13 +741,6 @@ impl VideoDecoder {
         }
 
         // Check for the target first
-        // println!(
-        //     "take_with_target: target={}/{} buf_len={} buf_pts={:?}",
-        //     target.timestamp() * target.time_base().num() as i64,
-        //     target.time_base().den(),
-        //     reorder_buffer.len(),
-        //     reorder_buffer.pts_values(),
-        // );
         if let Some(frame) = reorder_buffer.take_by_pts(target) {
             let remaining = reorder_buffer.pts_values();
             self.record_reordered_frame(&frame, "target_hit", &remaining);
@@ -743,13 +750,44 @@ impl VideoDecoder {
         // Fall back to normal behavior
         if reorder_buffer.is_full() {
             Ok(self.pop_reordered_frame("buffer_full"))
-        } else if draining && decoder_exhausted {
-            // EOF reached and the underlying decoder is fully drained: empty the
-            // reorder buffer one frame at a time instead of stranding the final
-            // `capacity - 1` frames. See `take()` for the full rationale.
-            Ok(self.pop_reordered_frame("drain"))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Pull frames from the underlying decoder into the reorder buffer until the
+    /// decoder is exhausted or the buffer is full. Used while draining at EOF, where
+    /// no further packets will arrive to fill the buffer on their own. Looping here
+    /// (rather than in the iterator) keeps `take()`/`take_with_target()` returning one
+    /// frame per call so the consumer's pull model still works during the drain.
+    fn fill_reorder_buffer(&mut self) -> Result<(), Error> {
+        loop {
+            let full = self
+                .reorder_buffer
+                .as_ref()
+                .map(|buf| buf.is_full())
+                .unwrap_or(true);
+            if full {
+                return Ok(());
+            }
+
+            match self.take_frame_inner()? {
+                Some(frame) => {
+                    if reorder_debug_enabled() {
+                        if let Some(buf) = self.reorder_buffer.as_ref() {
+                            info!(
+                                "reorder drain-fill pts={} len_before={} buf={:?}",
+                                frame.pts().timestamp(),
+                                buf.len(),
+                                buf.pts_values()
+                            );
+                        }
+                    }
+                    let _ = self.reorder_buffer.as_mut().unwrap().push(frame);
+                }
+                // Decoder fully drained; whatever is in the buffer is all that remains.
+                None => return Ok(()),
+            }
         }
     }
 
