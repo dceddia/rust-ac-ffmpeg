@@ -915,6 +915,38 @@ impl VideoFrame {
         }
     }
 
+    /// Get the D3D11 texture pointer for an `AV_PIX_FMT_D3D11` frame.
+    ///
+    /// FFmpeg stores the `ID3D11Texture2D*` in `AVFrame.data[0]`.
+    pub fn d3d11_texture_ptr(&self) -> Option<*mut c_void> {
+        if !self.is_hw_frame()
+            || self.av_pixel_format() != AVPixelFormat::AV_PIX_FMT_D3D11
+        {
+            return None;
+        }
+
+        let data = unsafe { ffw_frame_get_plane_data(self.ptr, 0) };
+        if data.is_null() {
+            None
+        } else {
+            Some(data.cast())
+        }
+    }
+
+    /// Get the texture array index for an `AV_PIX_FMT_D3D11` frame.
+    ///
+    /// FFmpeg stores this in `AVFrame.data[1]` as an `intptr_t` value.
+    pub fn d3d11_texture_array_index(&self) -> Option<usize> {
+        if !self.is_hw_frame()
+            || self.av_pixel_format() != AVPixelFormat::AV_PIX_FMT_D3D11
+        {
+            return None;
+        }
+
+        let data = unsafe { ffw_frame_get_plane_data(self.ptr, 1) };
+        Some(data as isize as usize)
+    }
+
     /// Get frame time base.
     pub fn time_base(&self) -> TimeBase {
         self.time_base
