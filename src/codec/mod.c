@@ -1,6 +1,13 @@
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/hwcontext.h>
+
+#ifdef _WIN32
+#include <stdio.h>
+#include <string.h>
+#include <windows.h>
+#endif
 
 static const AVCodec* ffw_find_codec(const char* name, int type) {
     const AVCodec* codec;
@@ -229,20 +236,78 @@ void ffw_decoder_set_discard(Decoder* decoder, int discard);
 AVCodecParameters* ffw_decoder_get_codec_parameters(const Decoder* decoder);
 void ffw_decoder_free(Decoder* decoder);
 
+#ifdef _WIN32
+// One D3D11VA device for every decoder: creating one per decoder (each clip, and each seek of
+// an HEVC stream, which rebuilds its decoder) takes time and memory, and FFmpeg's D3D11VA
+// device locks its immediate context, so decoders on several threads can share it.
+static SRWLOCK ffw_hw_device_lock = SRWLOCK_INIT;
+static AVBufferRef* ffw_hw_device_ctx = NULL;
+static enum AVHWDeviceType ffw_hw_device_type = AV_HWDEVICE_TYPE_NONE;
+// The device to decode on (D3D11VA: a DXGI adapter's index), "" for the default adapter.
+static char ffw_hw_device_name[32] = "";
+static int ffw_hw_device_changed = 0;
+
+// The adapter the next decoders decode on: the one the renderer draws with, so its textures can
+// be opened there (another adapter's can't). NULL for the default one.
+void ffw_set_hwaccel_device(const char* name) {
+    AcquireSRWLockExclusive(&ffw_hw_device_lock);
+    const char* next = name == NULL ? "" : name;
+    if (strncmp(next, ffw_hw_device_name, sizeof(ffw_hw_device_name)) != 0) {
+        snprintf(ffw_hw_device_name, sizeof(ffw_hw_device_name), "%s", next);
+        ffw_hw_device_changed = 1;
+    }
+    ReleaseSRWLockExclusive(&ffw_hw_device_lock);
+}
+
+static int ffw_shared_hw_device(enum AVHWDeviceType type, AVBufferRef** out) {
+    int err = 0;
+
+    AcquireSRWLockExclusive(&ffw_hw_device_lock);
+    if (ffw_hw_device_ctx == NULL || ffw_hw_device_type != type || ffw_hw_device_changed) {
+        const char* device = ffw_hw_device_name[0] == '\0' ? NULL : ffw_hw_device_name;
+        av_buffer_unref(&ffw_hw_device_ctx);
+        err = av_hwdevice_ctx_create(&ffw_hw_device_ctx, type, device, NULL, 0);
+        ffw_hw_device_type = err < 0 ? AV_HWDEVICE_TYPE_NONE : type;
+        ffw_hw_device_changed = 0;
+    }
+    *out = err < 0 ? NULL : av_buffer_ref(ffw_hw_device_ctx);
+    ReleaseSRWLockExclusive(&ffw_hw_device_lock);
+
+    if (err >= 0 && *out == NULL) {
+        err = AVERROR(ENOMEM);
+    }
+    return err;
+}
+#endif
+
 int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     const AVCodecHWConfig *config = NULL;
     AVBufferRef *hw_device_ctx = NULL;
     int i;
 
-    // Find a hardware decoder that will work for the codec
+    // Find a hardware decoder that will work for the codec. On Windows prefer D3D11VA: its
+    // frames are textures the renderer can import (DXVA2, listed first, gives D3D9 surfaces).
     for (i = 0; i < 50; i++) {
-        config = avcodec_get_hw_config(decoder->decoder, i);
-        if (!config)
+        const AVCodecHWConfig *candidate = avcodec_get_hw_config(decoder->decoder, i);
+        if (!candidate)
             break;
 
-        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) {
+        if (!(candidate->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
+            continue;
+        }
+
+#ifdef _WIN32
+        if (candidate->device_type == AV_HWDEVICE_TYPE_D3D11VA) {
+            config = candidate;
             break;
         }
+        if (!config) {
+            config = candidate;
+        }
+#else
+        config = candidate;
+        break;
+#endif
     }
 
     // Give up if we didn't find any good hardware devices
@@ -251,13 +316,30 @@ int ffw_decoder_hwaccel_autoselect_device(Decoder* decoder) {
     }
 
     // Initialize the hardware decoder
+#ifdef _WIN32
+    int err = ffw_shared_hw_device(config->device_type, &hw_device_ctx);
+#else
     int err = av_hwdevice_ctx_create(&hw_device_ctx, config->device_type, NULL, NULL, 0);
+#endif
     if (err < 0) {
         av_log(NULL, AV_LOG_ERROR, "Device creation failed: %d.\n", err);
         goto fail;
     }
-    decoder->cc->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    // The context takes our reference (it unrefs it when freed).
+    decoder->cc->hw_device_ctx = hw_device_ctx;
     decoder->use_hwaccel = 1;
+
+#ifdef _WIN32
+    if (config->device_type == AV_HWDEVICE_TYPE_D3D11VA) {
+        // D3D11VA's frames are slices of one texture array of fixed size, enough for the
+        // decoder's references and a few more. Recut holds decoded frames until they're shown
+        // (its reorder buffer, the player's queue, the renderer: about 24), and a decoder out
+        // of slices fails its frames. Frame threads only add slices and delay with hardware
+        // decoding, which is serial.
+        decoder->cc->extra_hw_frames = 24;
+        decoder->cc->thread_count = 1;
+    }
+#endif
 
     return 0;
 

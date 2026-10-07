@@ -62,6 +62,17 @@ impl DecodeBackend {
     }
 }
 
+/// The device hardware decoders decode on from now on (D3D11VA: a DXGI adapter's index, as
+/// `IDXGIFactory1::EnumAdapters1` lists them), `None` for the system's default. The decoders
+/// share one device, made when the first needs it after this changes.
+#[cfg(target_os = "windows")]
+pub fn set_hardware_device(name: Option<&str>) {
+    let name = name.map(|name| CString::new(name).expect("invalid device name"));
+    unsafe {
+        super::ffw_set_hwaccel_device(name.as_ref().map_or(ptr::null(), |name| name.as_ptr()))
+    };
+}
+
 fn reorder_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var_os("RECUT_DEBUG_REORDER").is_some())
