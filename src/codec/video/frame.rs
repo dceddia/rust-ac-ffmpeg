@@ -691,6 +691,7 @@ impl VideoFrameMut {
             original_pts,
             rotation: self.rotation,
             ambient_illuminance: None,
+            dolby_vision: None,
         };
 
         frame
@@ -706,6 +707,22 @@ impl Drop for VideoFrameMut {
 unsafe impl Send for VideoFrameMut {}
 unsafe impl Sync for VideoFrameMut {}
 
+/// What a frame's Dolby Vision RPU (its per-frame metadata) says that showing the frame
+/// depends on. FFmpeg 5.1 gives no Dolby Vision metadata for frames VideoToolbox decodes, and
+/// none of the RPU's extension blocks for any frame, so the caller parses each packet's RPU
+/// and sets this on the frame it decodes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DolbyVisionMetadata {
+    /// Identifies the RPU apart from the statistics that change from frame to frame: the
+    /// reshaping, the trims, the target displays. The caller computes it, so frames whose
+    /// RPUs differ only in those statistics share it.
+    pub fingerprint: u64,
+    /// Level 1: the frame's darkest, average and brightest pixel, 12-bit PQ (0 to 4095)
+    pub min_pq: u16,
+    pub avg_pq: u16,
+    pub max_pq: u16,
+}
+
 /// A video frame with immutable data.
 pub struct VideoFrame {
     ptr: *mut c_void,
@@ -714,6 +731,7 @@ pub struct VideoFrame {
     original_pts: Timestamp,
     rotation: f64,
     ambient_illuminance: Option<f64>,
+    dolby_vision: Option<DolbyVisionMetadata>,
 }
 
 impl VideoFrame {
@@ -730,6 +748,7 @@ impl VideoFrame {
             original_pts: Timestamp::null(),
             rotation,
             ambient_illuminance: None,
+            dolby_vision: None,
         };
 
         frame.original_pts = frame.pts();
@@ -1001,6 +1020,17 @@ impl VideoFrame {
         self
     }
 
+    /// The frame's Dolby Vision metadata, as far as showing it needs (see
+    /// [`DolbyVisionMetadata`]: the caller sets it). None for frames without any.
+    pub fn dolby_vision(&self) -> Option<DolbyVisionMetadata> {
+        self.dolby_vision
+    }
+
+    pub fn with_dolby_vision(mut self, metadata: Option<DolbyVisionMetadata>) -> Self {
+        self.dolby_vision = metadata;
+        self
+    }
+
     /// Set frame time base. (This will rescale the current timestamp into a
     /// given time base.)
     pub fn with_time_base(mut self, time_base: TimeBase) -> Self {
@@ -1096,6 +1126,7 @@ impl Clone for VideoFrame {
             original_pts: self.original_pts,
             rotation: self.rotation,
             ambient_illuminance: self.ambient_illuminance,
+            dolby_vision: self.dolby_vision,
         }
     }
 }

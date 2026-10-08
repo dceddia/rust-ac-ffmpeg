@@ -225,7 +225,8 @@ impl VideoFrameScaler {
         // survives scaling (e.g. a held VFR frame keeps its source timestamp).
         let scaled = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) }
             .with_original_pts(frame.original_pts())
-            .with_ambient_illuminance(frame.ambient_illuminance());
+            .with_ambient_illuminance(frame.ambient_illuminance())
+            .with_dolby_vision(frame.dolby_vision());
 
         Ok(scaled)
     }

@@ -29,8 +29,8 @@ use crate::{
 
 pub use self::{
     frame::{
-        Chromaticity, ContentLightLevel, HdrMetadata, MasteringDisplayMetadata, PixelFormat,
-        SampleAspectRatio, VideoFrame, VideoFrameMut,
+        Chromaticity, ContentLightLevel, DolbyVisionMetadata, HdrMetadata,
+        MasteringDisplayMetadata, PixelFormat, SampleAspectRatio, VideoFrame, VideoFrameMut,
     },
     scaler::{VideoFrameScaler, VideoFrameScalerBuilder},
 };
