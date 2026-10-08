@@ -224,7 +224,8 @@ impl VideoFrameScaler {
         // frame's original_pts from that PTS. Preserve the source's original_pts so it
         // survives scaling (e.g. a held VFR frame keeps its source timestamp).
         let scaled = unsafe { VideoFrame::from_raw_ptr(res, frame.time_base(), frame.rotation()) }
-            .with_original_pts(frame.original_pts());
+            .with_original_pts(frame.original_pts())
+            .with_ambient_illuminance(frame.ambient_illuminance());
 
         Ok(scaled)
     }

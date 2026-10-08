@@ -260,6 +260,13 @@ int ffw_frame_get_chroma_location(const AVFrame* frame) {
     return frame->chroma_location;
 }
 
+void ffw_frame_set_color_properties(AVFrame* frame, int primaries, int trc, int colorspace, int range) {
+    frame->color_primaries = primaries;
+    frame->color_trc = trc;
+    frame->colorspace = colorspace;
+    frame->color_range = range;
+}
+
 int ffw_frame_get_num_planes(const AVFrame* frame) {
     return av_pix_fmt_count_planes(frame->format);
 }

@@ -64,6 +64,13 @@ extern "C" {
     fn ffw_frame_get_colorspace(frame: *const c_void) -> c_int;
     fn ffw_frame_get_color_range(frame: *const c_void) -> c_int;
     fn ffw_frame_get_chroma_location(frame: *const c_void) -> c_int;
+    fn ffw_frame_set_color_properties(
+        frame: *mut c_void,
+        primaries: c_int,
+        trc: c_int,
+        colorspace: c_int,
+        range: c_int,
+    );
     fn ffw_frame_get_num_planes(frame: *const c_void) -> c_int;
     fn ffw_frame_get_pts(frame: *const c_void) -> i64;
     fn ffw_frame_set_pts(frame: *mut c_void, pts: i64);
@@ -592,6 +599,27 @@ impl VideoFrameMut {
         self.is_blank
     }
 
+    /// Set the color primaries, transfer characteristic, matrix and range (the `AVCOL_*`
+    /// values) the frame's pixels are in.
+    pub fn with_color_properties(
+        self,
+        primaries: u32,
+        transfer: u32,
+        colorspace: u32,
+        range: u32,
+    ) -> Self {
+        unsafe {
+            ffw_frame_set_color_properties(
+                self.ptr,
+                primaries as _,
+                transfer as _,
+                colorspace as _,
+                range as _,
+            )
+        }
+        self
+    }
+
     /// Get presentation timestamp.
     pub fn pts(&self) -> Timestamp {
         let pts = unsafe { ffw_frame_get_pts(self.ptr) };
@@ -662,6 +690,7 @@ impl VideoFrameMut {
             is_blank: self.is_blank,
             original_pts,
             rotation: self.rotation,
+            ambient_illuminance: None,
         };
 
         frame
@@ -684,6 +713,7 @@ pub struct VideoFrame {
     is_blank: bool,
     original_pts: Timestamp,
     rotation: f64,
+    ambient_illuminance: Option<f64>,
 }
 
 impl VideoFrame {
@@ -699,6 +729,7 @@ impl VideoFrame {
             is_blank: false,
             original_pts: Timestamp::null(),
             rotation,
+            ambient_illuminance: None,
         };
 
         frame.original_pts = frame.pts();
@@ -958,6 +989,18 @@ impl VideoFrame {
         self.rotation
     }
 
+    /// The light level around the camera when the video was recorded, in lux, from the
+    /// stream's Ambient Viewing Environment (the container's `amve` box, which FFmpeg 5.1
+    /// doesn't read: the caller sets it). None when the stream doesn't say.
+    pub fn ambient_illuminance(&self) -> Option<f64> {
+        self.ambient_illuminance
+    }
+
+    pub fn with_ambient_illuminance(mut self, lux: Option<f64>) -> Self {
+        self.ambient_illuminance = lux;
+        self
+    }
+
     /// Set frame time base. (This will rescale the current timestamp into a
     /// given time base.)
     pub fn with_time_base(mut self, time_base: TimeBase) -> Self {
@@ -1052,6 +1095,7 @@ impl Clone for VideoFrame {
             is_blank: self.is_blank,
             original_pts: self.original_pts,
             rotation: self.rotation,
+            ambient_illuminance: self.ambient_illuminance,
         }
     }
 }
