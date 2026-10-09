@@ -13,6 +13,7 @@ use crate::{
 extern "C" {
     fn ffw_stream_get_time_base(stream: *const c_void, num: *mut u32, den: *mut u32);
     fn ffw_stream_get_index(stream: *const c_void) -> c_int;
+    fn ffw_stream_get_id(stream: *const c_void) -> c_int;
     fn ffw_stream_is_attached_pic(stream: *const c_void) -> c_int;
     fn ffw_stream_get_start_time(stream: *const c_void) -> i64;
     fn ffw_stream_get_duration(stream: *const c_void) -> i64;
@@ -36,6 +37,57 @@ extern "C" {
         timestamp: *mut i64,
         keyframe: *mut c_int,
     ) -> c_int;
+    fn ffw_stream_get_index_entry_details(
+        stream: *const c_void,
+        idx: c_int,
+        timestamp: *mut i64,
+        pos: *mut i64,
+        size: *mut c_int,
+        flags: *mut c_int,
+    ) -> c_int;
+}
+
+/// FFmpeg's AVINDEX_KEYFRAME and AVINDEX_DISCARD_FRAME index entry flags
+const AVINDEX_KEYFRAME: c_int = 0x0001;
+const AVINDEX_DISCARD_FRAME: c_int = 0x0002;
+
+/// An entry of a stream's index: a packet the demuxer knows the time and place of, without
+/// reading it.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct IndexEntry {
+    timestamp: Timestamp,
+    pos: i64,
+    size: i32,
+    flags: c_int,
+}
+
+impl IndexEntry {
+    /// The packet's timestamp, as the demuxer indexes it: its decoding time (DTS) for most
+    /// containers (MP4/MOV, AVI), its presentation time for Matroska.
+    pub fn timestamp(&self) -> Timestamp {
+        self.timestamp
+    }
+
+    /// The packet's byte position in the file, or -1 if it's not known.
+    pub fn pos(&self) -> i64 {
+        self.pos
+    }
+
+    /// The packet's size in bytes, or 0 if it's not known.
+    pub fn size(&self) -> i32 {
+        self.size
+    }
+
+    /// Whether the packet is a keyframe, one a decoder can start from.
+    pub fn is_keyframe(&self) -> bool {
+        self.flags & AVINDEX_KEYFRAME != 0
+    }
+
+    /// Whether the packet is decoded but then dropped, like the frames an MP4/MOV's edit list
+    /// leaves out.
+    pub fn is_discarded(&self) -> bool {
+        self.flags & AVINDEX_DISCARD_FRAME != 0
+    }
 }
 
 /// Used to specify whether (and how) a stream's packets should be discarded while demuxing.
@@ -151,6 +203,12 @@ impl Stream {
         unsafe { ffw_stream_get_index(self.ptr) as _ }
     }
 
+    /// Get the container's ID for the stream, e.g. an MP4/MOV track ID, a Matroska track
+    /// number or an MPEG-TS PID. It's 0 for containers that don't have one.
+    pub fn id(&self) -> i32 {
+        unsafe { ffw_stream_get_id(self.ptr) as _ }
+    }
+
     /// Get whether the stream is an "attached picture", where it
     /// only stores a single frame that's used as cover art or a thumbnail.
     pub fn is_picture(&self) -> bool {
@@ -239,6 +297,37 @@ impl Stream {
             }
         }
         keyframes
+    }
+
+    /// Get the entries of this stream's index, in the index's order (by timestamp), one by one.
+    /// There are none if the container doesn't have an index (e.g. raw MPEG-TS).
+    pub fn index_entries(&self) -> impl Iterator<Item = IndexEntry> + '_ {
+        let count = unsafe { ffw_stream_get_index_entries_count(self.ptr) };
+        (0..count.max(0)).filter_map(move |i| {
+            let mut timestamp: i64 = 0;
+            let mut pos: i64 = 0;
+            let mut size: c_int = 0;
+            let mut flags: c_int = 0;
+            let ret = unsafe {
+                ffw_stream_get_index_entry_details(
+                    self.ptr,
+                    i,
+                    &mut timestamp,
+                    &mut pos,
+                    &mut size,
+                    &mut flags,
+                )
+            };
+            if ret != 0 {
+                return None;
+            }
+            Some(IndexEntry {
+                timestamp: Timestamp::new(timestamp, self.time_base),
+                pos,
+                size,
+                flags,
+            })
+        })
     }
 
     /// Get stream metadata.

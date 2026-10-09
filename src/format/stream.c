@@ -5,6 +5,7 @@ void ffw_stream_get_time_base(const AVStream* stream, uint32_t* num, uint32_t* d
 void ffw_stream_get_r_frame_rate(const AVStream* stream, uint32_t* num, uint32_t* den);
 void ffw_stream_get_avg_frame_rate(const AVStream* stream, uint32_t* num, uint32_t* den);
 int ffw_stream_get_index(const AVStream* stream);
+int ffw_stream_get_id(const AVStream* stream);
 int64_t ffw_stream_get_start_time(const AVStream* stream);
 int64_t ffw_stream_get_duration(const AVStream* stream);
 int64_t ffw_stream_get_nb_frames(const AVStream* stream);
@@ -32,6 +33,10 @@ void ffw_stream_get_avg_frame_rate(const AVStream* stream, uint32_t* num, uint32
 
 int ffw_stream_get_index(const AVStream* stream) {
     return stream->index;
+}
+
+int ffw_stream_get_id(const AVStream* stream) {
+    return stream->id;
 }
 
 int ffw_stream_is_attached_pic(const AVStream* stream) {
@@ -102,6 +107,16 @@ int ffw_stream_get_index_entry(const AVStream* stream, int idx, int64_t* timesta
     if (!entry) return -1;
     *timestamp = entry->timestamp;
     *keyframe = (entry->flags & AVINDEX_KEYFRAME) ? 1 : 0;
+    return 0;
+}
+
+int ffw_stream_get_index_entry_details(const AVStream* stream, int idx, int64_t* timestamp, int64_t* pos, int* size, int* flags) {
+    const AVIndexEntry* entry = avformat_index_get_entry((AVStream*)stream, idx);
+    if (!entry) return -1;
+    *timestamp = entry->timestamp;
+    *pos = entry->pos;
+    *size = entry->size;
+    *flags = entry->flags;
     return 0;
 }
 
