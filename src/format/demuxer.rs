@@ -67,6 +67,7 @@ extern "C" {
     ) -> c_int;
     fn ffw_demuxer_free(demuxer: *mut c_void);
     fn ffw_demuxer_get_metadata(demuxer: *mut c_void, key: *const c_char) -> *const c_char;
+    fn ffw_demuxer_get_format_name(demuxer: *const c_void) -> *const c_char;
 }
 
 /// Seek type/mode.
@@ -389,6 +390,20 @@ impl<T> Demuxer<T> {
         } else {
             let value = unsafe { CStr::from_ptr(value as _) };
             Some(value.to_str().unwrap())
+        }
+    }
+
+    /// Get the short name(s) of the input format FFmpeg opened the file with, e.g.
+    /// `mov,mp4,m4a,3gp,3g2,mj2`, `matroska,webm` or `mpegts`.
+    pub fn format_name(&self) -> Option<&'static str> {
+        let name = unsafe { ffw_demuxer_get_format_name(self.ptr) };
+
+        if name.is_null() {
+            None
+        } else {
+            // the input formats are static, so their names live as long as the program
+            let name = unsafe { CStr::from_ptr(name) };
+            name.to_str().ok()
         }
     }
 
