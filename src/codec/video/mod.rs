@@ -449,6 +449,7 @@ impl VideoDecoderBuilder {
             reorder_buffer,
             last_reordered_pts: None,
             draining: false,
+            output_empty: true,
             decode_backend: self.decode_backend,
 
             #[cfg(target_os = "macos")]
@@ -481,6 +482,8 @@ pub struct VideoDecoder {
     /// `take()` empties the reorder buffer even when it is not full so the final
     /// frames are not stranded. Reset when new packets are pushed or buffers cleared.
     draining: bool,
+    /// The decoder had no frame to give at the last take (see `output_empty()`)
+    output_empty: bool,
     decode_backend: DecodeBackend,
 
     #[cfg(target_os = "macos")]
@@ -655,6 +658,7 @@ impl Decoder for VideoDecoder {
 
     fn flush_buffers(&mut self) {
         self.clear_reorder_buffer();
+        self.output_empty = true;
 
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
@@ -802,8 +806,22 @@ impl VideoDecoder {
         }
     }
 
+    /// Whether the decoder itself had no frame to give at the last `take()` or
+    /// `take_with_target()` (FFmpeg's receive gave EAGAIN or EOF). Frames already in the reorder
+    /// buffer don't count: this is what FFmpeg means by its output being read, after which a
+    /// packet `try_push()` refused (EAGAIN) is to be pushed again, and won't be refused.
+    pub fn output_empty(&self) -> bool {
+        self.output_empty
+    }
+
     /// Get a frame from the underlying decoder
     fn take_frame_inner(&mut self) -> Result<Option<VideoFrame>, Error> {
+        let frame = self.receive_frame()?;
+        self.output_empty = frame.is_none();
+        Ok(frame)
+    }
+
+    fn receive_frame(&mut self) -> Result<Option<VideoFrame>, Error> {
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.take_frame().map(|f| {
