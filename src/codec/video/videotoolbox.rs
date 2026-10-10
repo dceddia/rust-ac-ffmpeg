@@ -51,6 +51,7 @@ extern "C" {
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
     pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void);
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
+    fn vt_decoder_uses_hardware(decoder: *mut c_void) -> i32;
 }
 
 // This is the Rust callback that will be called from C
@@ -128,14 +129,31 @@ impl VTDecoder {
             return Err(Error::new("Failed to create VideoToolbox decoder"));
         }
 
-        debug!("VideoToolbox decoder created successfully");
-        Ok(VTDecoder {
+        let decoder = VTDecoder {
             time_base,
             frame_tx,
             frame_rx,
             vt_decoder_ptr,
             sender_ptr,
-        })
+        };
+        let kind = match decoder.uses_hardware() {
+            Some(true) => "hardware",
+            Some(false) => "software",
+            None => "unknown",
+        };
+        debug!("VideoToolbox decoder created ({kind} decoder)");
+        Ok(decoder)
+    }
+
+    /// Whether VideoToolbox decodes on the media engine (`Some(true)`) or in software
+    /// (`Some(false)`, e.g. for formats the hardware can't decode), from the session's
+    /// `UsingHardwareAcceleratedVideoDecoder` property. `None` if it doesn't say.
+    pub fn uses_hardware(&self) -> Option<bool> {
+        match unsafe { vt_decoder_uses_hardware(self.vt_decoder_ptr) } {
+            1 => Some(true),
+            0 => Some(false),
+            _ => None,
+        }
     }
 
     pub fn is_supported(params: &VideoCodecParameters) -> bool {

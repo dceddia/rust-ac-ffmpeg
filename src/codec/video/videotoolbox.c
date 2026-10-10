@@ -488,6 +488,27 @@ static void didDecompress(void *decompressionOutputRefCon,
     // Note: The Rust side is responsible for calling av_frame_free when done
 }
 
+// Whether VideoToolbox chose a hardware decoder for this session: 1 if it did, 0 if it
+// decodes in software (e.g. a format the media engine can't decode), -1 if it doesn't say.
+int vt_decoder_uses_hardware(VTDecoder *decoder) {
+    if (!decoder || !decoder->decompressSession) {
+        return -1;
+    }
+    CFBooleanRef usingHardware = NULL;
+    OSStatus status = VTSessionCopyProperty(
+        decoder->decompressSession,
+        kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+        kCFAllocatorDefault,
+        &usingHardware
+    );
+    if (status != noErr || !usingHardware) {
+        return -1;
+    }
+    int result = CFBooleanGetValue(usingHardware) ? 1 : 0;
+    CFRelease(usingHardware);
+    return result;
+}
+
 // Drain: emit all delayed frames and wait for them to arrive.
 // Does NOT bump generation — we want these frames.
 void vt_decoder_flush(VTDecoder *decoder) {
