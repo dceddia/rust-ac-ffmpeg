@@ -691,12 +691,6 @@ enum DecoderOutput {
 }
 
 impl VideoDecoder {
-    /// `take()`. Kept until the callers stop asking for a target: the frame at it comes out as
-    /// soon as it's next anyway.
-    pub fn take_with_target(&mut self, _target: Timestamp) -> Result<Option<VideoFrame>, Error> {
-        self.take()
-    }
-
     /// The next frame in display order, if it's known to be next
     fn release_frame(&mut self) -> Option<VideoFrame> {
         let frame = self.order.as_mut()?.pop()?;
