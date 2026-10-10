@@ -202,28 +202,44 @@ impl VTDecoder {
         // which prematurely ends draining at EOF (a skip can sit ahead of real frames
         // still queued behind it). Only a truly empty channel means "no frame".
         loop {
-            match self.frame_rx.try_recv() {
-                Ok(DecodeResult::Frame(decoded_frame)) => {
-                    trace!("VideoToolbox: got frame from channel");
-                    return Ok(Some(decoded_frame));
+            match self.take_result()? {
+                Some(DecodeResult::Frame(decoded_frame)) => return Ok(Some(decoded_frame)),
+                Some(DecodeResult::Error { status, pts }) => {
+                    return Err(Self::decode_error(status, pts))
                 }
-                Ok(DecodeResult::Error { status, pts }) => {
-                    warn!("VideoToolbox decode error: status={} pts={}", status, pts);
-                    return Err(Error::new(format!(
-                        "Hardware decode error: status={} pts={}",
-                        status, pts
-                    )));
-                }
-                Ok(DecodeResult::Skipped { pts: _ }) => {
-                    // DoNotDisplay frame - not an error and not a frame; keep looking.
-                    continue;
-                }
-                Err(TryRecvError::Empty) => return Ok(None),
-                Err(TryRecvError::Disconnected) => {
-                    return Err(Error::new("Receiver disconnected"))
-                }
+                // DoNotDisplay frame - not an error and not a frame; keep looking.
+                Some(DecodeResult::Skipped { pts: _ }) => continue,
+                None => return Ok(None),
             }
         }
+    }
+
+    /// What VideoToolbox did with the next packet it finished with: its frame, or that it
+    /// skipped it or couldn't decode it. `None` while it hasn't finished with one since the last
+    /// take (it decodes asynchronously).
+    pub fn take_result(&mut self) -> Result<Option<DecodeResult>, Error> {
+        match self.frame_rx.try_recv() {
+            Ok(result) => {
+                match &result {
+                    DecodeResult::Frame(_) => trace!("VideoToolbox: got frame from channel"),
+                    DecodeResult::Error { status, pts } => {
+                        warn!("VideoToolbox decode error: status={} pts={}", status, pts)
+                    }
+                    DecodeResult::Skipped { .. } => {}
+                }
+                Ok(Some(result))
+            }
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(Error::new("Receiver disconnected")),
+        }
+    }
+
+    /// The error for a packet VideoToolbox couldn't decode
+    pub fn decode_error(status: i32, pts: i64) -> Error {
+        Error::new(format!(
+            "Hardware decode error: status={} pts={}",
+            status, pts
+        ))
     }
 
     pub fn flush_buffers(&mut self) {

@@ -2,6 +2,7 @@
 
 pub mod color;
 pub mod frame;
+mod frame_order;
 #[allow(non_camel_case_types)]
 pub mod pixel;
 pub mod scaler;
@@ -22,10 +23,11 @@ use crate::{
     codec::{CodecError, CodecParameters, Decoder, Encoder, VideoCodecParameters},
     format::stream::Stream,
     packet::Packet,
-    reorder_buffer::ReorderBuffer,
     time::{TimeBase, Timestamp},
     Error,
 };
+
+use self::frame_order::FrameOrder;
 
 pub use self::{
     frame::{
@@ -38,8 +40,6 @@ pub use self::{
 use super::ThreadType;
 
 pub use self::color::*;
-
-const REORDER_BUFFER_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HardwareAccel {
@@ -249,8 +249,8 @@ impl VideoDecoderBuilder {
         self
     }
 
-    /// Enable frame reordering to handle B-frames and out-of-order presentation timestamps.
-    /// This adds a buffer that collects frames until full, then outputs them in PTS order.
+    /// Give frames in display order, each as soon as no frame shown before it can still come
+    /// (see `frame_order`): VideoToolbox gives them in decode order.
     pub fn enable_reordering(mut self) -> Self {
         self.enable_reordering = true;
 
@@ -410,32 +410,18 @@ impl VideoDecoderBuilder {
     fn finish_build(mut self) -> Result<VideoDecoder, Error> {
         let ptr = self.ptr;
 
-        let reorder_buffer = if self.enable_reordering {
-            let b_frames = unsafe { super::ffw_decoder_get_b_frames(self.ptr) };
+        // FFmpeg's decoders give frames in display order; VideoToolbox gives them as it
+        // decodes them
+        #[cfg(target_os = "macos")]
+        let in_display_order = self.vt_decoder.is_none();
+        #[cfg(not(target_os = "macos"))]
+        let in_display_order = true;
+
+        let order = if self.enable_reordering {
             if reorder_debug_enabled() {
-                info!(
-                    "VideoDecoder reorder enabled: has_b_frames={} capacity={} hw={}",
-                    b_frames,
-                    REORDER_BUFFER_CAPACITY,
-                    {
-                        #[cfg(target_os = "macos")]
-                        {
-                            self.vt_decoder.is_some()
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            false
-                        }
-                    }
-                );
+                info!("VideoDecoder frame order: decoder in display order: {in_display_order}");
             }
-            // `AVCodecContext::has_b_frames` is not a reliable source of truth for the
-            // actual reorder depth required by a stream. We observed files reporting
-            // `has_b_frames=1` while the frame pattern still contained longer B-frame runs,
-            // and also decoder contexts reporting `has_b_frames=0` at build time for streams
-            // that clearly contain B-frames once decoding starts. When reordering is enabled,
-            // use a conservative fixed capacity immediately instead of trusting that field.
-            Some(ReorderBuffer::new(REORDER_BUFFER_CAPACITY))
+            Some(FrameOrder::new(in_display_order))
         } else {
             None
         };
@@ -446,9 +432,8 @@ impl VideoDecoderBuilder {
             ptr,
             time_base: self.time_base,
             rotation: self.rotation,
-            reorder_buffer,
-            last_reordered_pts: None,
-            draining: false,
+            order,
+            last_released_pts: None,
             output_empty: true,
             decode_backend: self.decode_backend,
 
@@ -475,13 +460,10 @@ pub struct VideoDecoder {
     /// The rotation of the underlying stream, in degrees.
     rotation: f64,
 
-    /// Frame reordering buffer for handling out-of-order frames (B-frames).
-    reorder_buffer: Option<ReorderBuffer>,
-    last_reordered_pts: Option<Timestamp>,
-    /// Set once the decoder has been flushed (EOF signalled). While draining,
-    /// `take()` empties the reorder buffer even when it is not full so the final
-    /// frames are not stranded. Reset when new packets are pushed or buffers cleared.
-    draining: bool,
+    /// Puts the frames in display order (`enable_reordering`)
+    order: Option<FrameOrder<VideoFrame>>,
+    /// The PTS of the last frame given out, to log one given out of order
+    last_released_pts: Option<Timestamp>,
     /// The decoder had no frame to give at the last take (see `output_empty()`)
     output_empty: bool,
     decode_backend: DecodeBackend,
@@ -491,39 +473,29 @@ pub struct VideoDecoder {
 }
 
 impl VideoDecoder {
-    fn record_reordered_frame(&mut self, frame: &VideoFrame, reason: &str, remaining: &[i64]) {
-        if let Some(last_pts) = self.last_reordered_pts {
+    fn record_released_frame(&mut self, frame: &VideoFrame) {
+        if let Some(last_pts) = self.last_released_pts {
             if frame.pts() < last_pts {
                 info!(
-                    "reorder emitted non-monotonic pts previous={} current={} reason={} remaining={:?}",
-                    last_pts.timestamp(),
+                    "Frame order: gave pts {} after {}",
                     frame.pts().timestamp(),
-                    reason,
-                    remaining
+                    last_pts.timestamp()
                 );
             }
         }
-        self.last_reordered_pts = Some(frame.pts());
+        self.last_released_pts = Some(frame.pts());
 
         if reorder_debug_enabled() {
-            info!(
-                "reorder emit reason={} pts={} remaining={:?}",
-                reason,
-                frame.pts().timestamp(),
-                remaining
-            );
+            info!("Frame order: gave pts {}", frame.pts().timestamp());
         }
     }
 
-    fn pop_reordered_frame(&mut self, reason: &str) -> Option<VideoFrame> {
-        let (frame, remaining) = {
-            let buf = self.reorder_buffer.as_mut()?;
-            let frame = buf.pop()?;
-            let remaining = buf.pts_values();
-            (frame, remaining)
-        };
-        self.record_reordered_frame(&frame, reason, &remaining);
-        Some(frame)
+    /// A packet went into the decoder: its frame is waited for (unless it's not to be shown)
+    fn note_pushed(&mut self, pts: Timestamp, dts: Timestamp, is_discard: bool) {
+        if let Some(order) = &mut self.order {
+            let known = |time: Timestamp| (!time.is_null()).then(|| time.timestamp());
+            order.pushed(known(pts), known(dts), !is_discard);
+        }
     }
 
     /// Create a new video decoder for a given codec.
@@ -571,10 +543,12 @@ impl VideoDecoder {
         }
     }
 
-    pub fn clear_reorder_buffer(&mut self) {
-        self.reorder_buffer.as_mut().map(|buf| buf.clear());
-        self.last_reordered_pts = None;
-        self.draining = false;
+    /// Forget the frames waiting for their turn and the packets they wait for, as after a seek
+    fn clear_frame_order(&mut self) {
+        if let Some(order) = &mut self.order {
+            order.clear();
+        }
+        self.last_released_pts = None;
     }
 
     pub fn decode_backend(&self) -> DecodeBackend {
@@ -582,15 +556,18 @@ impl VideoDecoder {
     }
 
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
-        self.clear_reorder_buffer();
+        self.clear_frame_order();
 
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             let packet = packet.with_time_base(self.time_base);
+            let (pts, dts, is_discard) = (packet.pts(), packet.dts(), packet.is_discard());
 
-            return vt_decoder
+            vt_decoder
                 .push_with_reset(packet)
-                .map_err(|err| err.unwrap_inner());
+                .map_err(|err| err.unwrap_inner())?;
+            self.note_pushed(pts, dts, is_discard);
+            return Ok(());
         }
 
         self.push(packet)
@@ -614,19 +591,22 @@ impl Decoder for VideoDecoder {
     }
 
     fn try_push(&mut self, packet: Packet) -> Result<(), CodecError> {
-        // A new packet means we're no longer at EOF: leave drain mode.
-        self.draining = false;
-
         let packet = packet.with_time_base(self.time_base);
+        let (pts, dts, is_discard) = (packet.pts(), packet.dts(), packet.is_discard());
 
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
-            return vt_decoder.try_push(packet);
+            vt_decoder.try_push(packet)?;
+            self.note_pushed(pts, dts, is_discard);
+            return Ok(());
         }
 
         unsafe {
             match super::ffw_decoder_push_packet(self.ptr, packet.as_ptr()) {
-                1 => Ok(()),
+                1 => {
+                    self.note_pushed(pts, dts, is_discard);
+                    Ok(())
+                }
                 0 => Err(CodecError::again(
                     "all frames must be consumed before pushing a new packet",
                 )),
@@ -636,9 +616,10 @@ impl Decoder for VideoDecoder {
     }
 
     fn try_flush(&mut self) -> Result<(), CodecError> {
-        // EOF: once the decoder has been flushed, `take()` should drain any frames
-        // still held in the reorder buffer rather than waiting for it to fill.
-        self.draining = true;
+        // The end: no packet is coming to show a frame before the ones waiting
+        if let Some(order) = &mut self.order {
+            order.flushed();
+        }
 
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
@@ -657,7 +638,7 @@ impl Decoder for VideoDecoder {
     }
 
     fn flush_buffers(&mut self) {
-        self.clear_reorder_buffer();
+        self.clear_frame_order();
         self.output_empty = true;
 
         #[cfg(target_os = "macos")]
@@ -668,167 +649,108 @@ impl Decoder for VideoDecoder {
         unsafe { super::ffw_decoder_flush_buffers(self.ptr) }
     }
 
-    /// Pull a decoded frame through the reorder buffer.
-    /// If a new frame is available from the decoder, it goes into the buffer.
-    /// Returns the earliest-PTS frame when the buffer is full.
+    /// The next frame. With `enable_reordering`, the next in display order, once no frame shown
+    /// before it can still come; takes what the decoder has until then.
     fn take(&mut self) -> Result<Option<VideoFrame>, Error> {
-        if self.reorder_buffer.is_none() {
+        if self.order.is_none() {
             return self.take_frame_inner();
         }
 
-        // After the decoder has been flushed (EOF), there are no more packets to
-        // grow the buffer to fullness. Pull everything the decoder still holds into
-        // the reorder buffer and emit it in PTS order, otherwise the final frames
-        // stay stuck and playback ends early.
-        if self.draining {
-            self.fill_reorder_buffer()?;
-            return Ok(self.pop_reordered_frame("drain"));
-        }
-
-        let new_frame = self.take_frame_inner()?;
-        let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
-
-        if let Some(frame) = new_frame {
-            if reorder_buffer.is_full() {
-                panic!("reorder buffer should not be full yet");
+        loop {
+            // At the end, every frame the decoder still has goes in first: they can come in any
+            // order
+            let draining = self.order.as_ref().is_some_and(|order| order.is_draining());
+            if !draining {
+                if let Some(frame) = self.release_frame() {
+                    return Ok(Some(frame));
+                }
             }
-            if reorder_debug_enabled() {
-                info!(
-                    "reorder recv pts={} len_before={} buf={:?}",
-                    frame.pts().timestamp(),
-                    reorder_buffer.len(),
-                    reorder_buffer.pts_values()
-                );
-            }
-            let _ = reorder_buffer.push(frame);
-        }
 
-        if reorder_buffer.is_full() {
-            Ok(self.pop_reordered_frame("buffer_full"))
-        } else {
-            Ok(None)
+            match self.take_output()? {
+                Some(DecoderOutput::Frame(frame)) => {
+                    let pts = frame.pts().timestamp();
+                    if reorder_debug_enabled() {
+                        info!("Frame order: decoded pts {pts}");
+                    }
+                    self.order.as_mut().unwrap().decoded(pts, frame);
+                }
+                Some(DecoderOutput::NoFrame(pts)) => {
+                    self.order.as_mut().unwrap().not_decoded(pts);
+                }
+                None => return Ok(self.release_frame()),
+            }
         }
     }
 }
 
+/// What a decoder gave at a take
+enum DecoderOutput {
+    Frame(VideoFrame),
+    /// The packet with this PTS won't give a frame (VideoToolbox skipped it)
+    NoFrame(i64),
+}
+
 impl VideoDecoder {
-    /// Pull a decoded frame and check if the target PTS is in the reorder buffer.
-    /// If found, returns it immediately (skipping the fullness requirement).
-    /// If not found but the buffer is full, returns the earliest frame.
-    /// Used for fast first-frame-after-seek.
-    pub fn take_with_target(&mut self, target: Timestamp) -> Result<Option<VideoFrame>, Error> {
-        if self.reorder_buffer.is_none() {
-            return self.take_frame_inner();
-        }
-
-        // At EOF (post-flush) there are no more packets to fill the buffer, so pull
-        // everything the decoder still holds before looking for the target. Without
-        // this, a seek landing on one of the last frames returns nothing (the target
-        // is never pulled in) or stops after a single frame. See `take()`.
-        if self.draining {
-            self.fill_reorder_buffer()?;
-            let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
-            if let Some(frame) = reorder_buffer.take_by_pts(target) {
-                let remaining = reorder_buffer.pts_values();
-                self.record_reordered_frame(&frame, "target_hit", &remaining);
-                return Ok(Some(frame));
-            }
-            return Ok(self.pop_reordered_frame("drain"));
-        }
-
-        let new_frame = self.take_frame_inner()?;
-        let reorder_buffer = self.reorder_buffer.as_mut().unwrap();
-
-        if let Some(frame) = new_frame {
-            if reorder_buffer.is_full() {
-                panic!("reorder buffer should not be full yet");
-            }
-            if reorder_debug_enabled() {
-                info!(
-                    "reorder recv pts={} len_before={} target={} buf={:?}",
-                    frame.pts().timestamp(),
-                    reorder_buffer.len(),
-                    target.timestamp(),
-                    reorder_buffer.pts_values()
-                );
-            }
-            let _ = reorder_buffer.push(frame);
-        }
-
-        // Check for the target first
-        if let Some(frame) = reorder_buffer.take_by_pts(target) {
-            let remaining = reorder_buffer.pts_values();
-            self.record_reordered_frame(&frame, "target_hit", &remaining);
-            return Ok(Some(frame));
-        }
-
-        // Fall back to normal behavior
-        if reorder_buffer.is_full() {
-            Ok(self.pop_reordered_frame("buffer_full"))
-        } else {
-            Ok(None)
-        }
+    /// `take()`. Kept until the callers stop asking for a target: the frame at it comes out as
+    /// soon as it's next anyway.
+    pub fn take_with_target(&mut self, _target: Timestamp) -> Result<Option<VideoFrame>, Error> {
+        self.take()
     }
 
-    /// Pull frames from the underlying decoder into the reorder buffer until the
-    /// decoder is exhausted or the buffer is full. Used while draining at EOF, where
-    /// no further packets will arrive to fill the buffer on their own. Looping here
-    /// (rather than in the iterator) keeps `take()`/`take_with_target()` returning one
-    /// frame per call so the consumer's pull model still works during the drain.
-    fn fill_reorder_buffer(&mut self) -> Result<(), Error> {
-        loop {
-            let full = self
-                .reorder_buffer
-                .as_ref()
-                .map(|buf| buf.is_full())
-                .unwrap_or(true);
-            if full {
-                return Ok(());
-            }
-
-            match self.take_frame_inner()? {
-                Some(frame) => {
-                    if reorder_debug_enabled() {
-                        if let Some(buf) = self.reorder_buffer.as_ref() {
-                            info!(
-                                "reorder drain-fill pts={} len_before={} buf={:?}",
-                                frame.pts().timestamp(),
-                                buf.len(),
-                                buf.pts_values()
-                            );
-                        }
-                    }
-                    let _ = self.reorder_buffer.as_mut().unwrap().push(frame);
-                }
-                // Decoder fully drained; whatever is in the buffer is all that remains.
-                None => return Ok(()),
-            }
-        }
+    /// The next frame in display order, if it's known to be next
+    fn release_frame(&mut self) -> Option<VideoFrame> {
+        let frame = self.order.as_mut()?.pop()?;
+        self.record_released_frame(&frame);
+        Some(frame)
     }
 
-    /// Whether the decoder itself had no frame to give at the last `take()` or
-    /// `take_with_target()` (FFmpeg's receive gave EAGAIN or EOF). Frames already in the reorder
-    /// buffer don't count: this is what FFmpeg means by its output being read, after which a
-    /// packet `try_push()` refused (EAGAIN) is to be pushed again, and won't be refused.
+    /// Whether the decoder itself had no frame to give at the last `take()` (FFmpeg's receive
+    /// gave EAGAIN or EOF). Frames waiting for their turn (`enable_reordering`) don't count: this
+    /// is what FFmpeg means by its output being read, after which a packet `try_push()` refused
+    /// (EAGAIN) is to be pushed again, and won't be refused.
     pub fn output_empty(&self) -> bool {
         self.output_empty
     }
 
     /// Get a frame from the underlying decoder
     fn take_frame_inner(&mut self) -> Result<Option<VideoFrame>, Error> {
-        let frame = self.receive_frame()?;
-        self.output_empty = frame.is_none();
-        Ok(frame)
+        loop {
+            match self.take_output()? {
+                Some(DecoderOutput::Frame(frame)) => return Ok(Some(frame)),
+                Some(DecoderOutput::NoFrame(_)) => continue,
+                None => return Ok(None),
+            }
+        }
     }
 
-    fn receive_frame(&mut self) -> Result<Option<VideoFrame>, Error> {
+    /// What the underlying decoder has next: a frame, or word that a packet won't give one
+    fn take_output(&mut self) -> Result<Option<DecoderOutput>, Error> {
+        let output = self.receive_output();
+        self.output_empty = matches!(output, Ok(None));
+        output
+    }
+
+    fn receive_output(&mut self) -> Result<Option<DecoderOutput>, Error> {
         #[cfg(target_os = "macos")]
         if let Some(vt_decoder) = &mut self.vt_decoder {
-            return vt_decoder.take_frame().map(|f| {
-                f.map(|f| unsafe {
-                    VideoFrame::from_raw_ptr(f.into_raw_ptr(), self.time_base, self.rotation)
-                })
-            });
+            use videotoolbox::DecodeResult;
+
+            return match vt_decoder.take_result()? {
+                Some(DecodeResult::Frame(frame)) => {
+                    let frame = frame.into_raw_ptr();
+                    let frame =
+                        unsafe { VideoFrame::from_raw_ptr(frame, self.time_base, self.rotation) };
+                    Ok(Some(DecoderOutput::Frame(frame)))
+                }
+                Some(DecodeResult::Skipped { pts }) => Ok(Some(DecoderOutput::NoFrame(pts))),
+                Some(DecodeResult::Error { status, pts }) => {
+                    if let Some(order) = &mut self.order {
+                        order.not_decoded(pts);
+                    }
+                    Err(videotoolbox::VTDecoder::decode_error(status, pts))
+                }
+                None => Ok(None),
+            };
         }
 
         let mut fptr = ptr::null_mut();
@@ -839,11 +761,8 @@ impl VideoDecoder {
                     if fptr.is_null() {
                         panic!("no frame received")
                     } else {
-                        Ok(Some(VideoFrame::from_raw_ptr(
-                            fptr,
-                            self.time_base,
-                            self.rotation,
-                        )))
+                        let frame = VideoFrame::from_raw_ptr(fptr, self.time_base, self.rotation);
+                        Ok(Some(DecoderOutput::Frame(frame)))
                     }
                 }
                 0 => Ok(None),
