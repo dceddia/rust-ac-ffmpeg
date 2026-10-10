@@ -52,8 +52,19 @@ fn main() {
     }
 }
 
+/// `<name>_<target triple>` (`FFMPEG_LIB_DIR_aarch64_apple_darwin`) if it's set, else `<name>`,
+/// as the cc crate does: one cargo run that builds several targets
+/// (tools/package-macos.sh's universal build) gives each its own FFmpeg.
+fn target_env_var(name: &str) -> Result<String, env::VarError> {
+    let target = env::var("TARGET").unwrap().replace('-', "_");
+    let target_name = format!("{name}_{target}");
+    println!("cargo:rerun-if-env-changed={target_name}");
+    println!("cargo:rerun-if-env-changed={name}");
+    env::var(target_name).or_else(|_| env::var(name))
+}
+
 fn ffmpeg_include_dirs() -> Vec<PathBuf> {
-    if let Ok(dir) = env::var("FFMPEG_INCLUDE_DIR") {
+    if let Ok(dir) = target_env_var("FFMPEG_INCLUDE_DIR") {
         let dir = PathBuf::from(dir);
 
         if dir.is_dir() {
@@ -77,7 +88,7 @@ fn ffmpeg_include_dirs() -> Vec<PathBuf> {
 }
 
 fn ffmpeg_lib_dirs() -> Vec<PathBuf> {
-    if let Ok(dir) = env::var("FFMPEG_LIB_DIR") {
+    if let Ok(dir) = target_env_var("FFMPEG_LIB_DIR") {
         let dir = PathBuf::from(dir);
 
         if dir.is_dir() {
