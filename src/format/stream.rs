@@ -299,6 +299,11 @@ impl Stream {
         keyframes
     }
 
+    /// How many entries the demuxer's index of this stream has (`index_entries`).
+    pub fn index_entry_count(&self) -> usize {
+        unsafe { ffw_stream_get_index_entries_count(self.ptr).max(0) as usize }
+    }
+
     /// Get the entries of this stream's index, in the index's order (by timestamp), one by one.
     /// There are none if the container doesn't have an index (e.g. raw MPEG-TS).
     pub fn index_entries(&self) -> impl Iterator<Item = IndexEntry> + '_ {

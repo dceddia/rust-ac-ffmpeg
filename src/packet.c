@@ -83,6 +83,10 @@ void ffw_packet_set_discard(AVPacket* packet, int discard) {
     }
 }
 
+int ffw_packet_is_disposable(const AVPacket* packet) {
+    return packet->flags & AV_PKT_FLAG_DISPOSABLE;
+}
+
 int ffw_packet_get_size(const AVPacket* packet) {
     return packet->size;
 }

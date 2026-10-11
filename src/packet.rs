@@ -28,6 +28,7 @@ extern "C" {
     fn ffw_packet_set_key(packet: *mut c_void, key: c_int);
     fn ffw_packet_is_discard(packet: *const c_void) -> c_int;
     fn ffw_packet_set_discard(packet: *mut c_void, discard: c_int);
+    fn ffw_packet_is_disposable(packet: *const c_void) -> c_int;
     fn ffw_packet_get_stream_index(packet: *const c_void) -> c_int;
     fn ffw_packet_set_stream_index(packet: *mut c_void, index: c_int);
     fn ffw_packet_make_writable(packet: *mut c_void) -> c_int;
@@ -333,6 +334,12 @@ impl Packet {
     /// Check if the key flag is set.
     pub fn is_key(&self) -> bool {
         unsafe { ffw_packet_is_key(self.ptr) != 0 }
+    }
+
+    /// Whether the container says no other frame refers to this one (the disposable flag: an
+    /// MP4/MOV file's `sdtp` box, as iPhones and AVFoundation write it)
+    pub fn is_disposable(&self) -> bool {
+        unsafe { ffw_packet_is_disposable(self.ptr) != 0 }
     }
 
     /// Get raw pointer.
