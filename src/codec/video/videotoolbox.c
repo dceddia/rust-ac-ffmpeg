@@ -8,6 +8,7 @@
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_videotoolbox.h>
 #include <libavcodec/avcodec.h>
 #include <libavcodec/codec_par.h>
 #include <libavcodec/packet.h>
@@ -64,10 +65,43 @@ typedef struct VTDecoder {
     int reset_pending;
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
-    // The pixel buffers VideoToolbox may give: NV12 (8-bit) or P010 (10-bit), in video range
-    // and in full range
+    // The pixel buffers VideoToolbox may give, in video range and in full range: one entry of
+    // `vt_output_format`'s table, as `sw_format` is
     OSType output_pixel_formats[2];
 } VTDecoder;
+
+// The layout of the frames' samples in memory (what a copy to memory gives) for the output a
+// caller asks for. `chroma_format_idc` and `bit_depth` are the stream's (its SPS's): the
+// source's own layout. A `chroma_format_idc` below 0 asks for what this decoder always gave:
+// 8-bit 4:2:0, or 10-bit for HEVC Main 10 (the codec parameters say no more when the decoder
+// is made: `bits_per_raw_sample` is 0 until a frame is decoded), whatever the source is;
+// VideoToolbox converts.
+//
+// The CoreVideo formats asked for come from this too (FFmpeg's own mapping), so the buffers
+// VideoToolbox gives are always ones the hardware frames context (`sw_format`) maps: if they
+// weren't, `av_hwframe_transfer_data` would refuse them.
+static enum AVPixelFormat vt_output_format(const AVCodecParameters *params, int chroma_format_idc, int bit_depth) {
+    if (chroma_format_idc < 0) {
+        bool is_10bit = params->bits_per_raw_sample > 8
+                     || params->profile == FF_PROFILE_HEVC_MAIN_10;
+        return is_10bit ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+    }
+    switch (chroma_format_idc) {
+        case 2:
+            // 'x422'/'xf22' whatever the bit depth: never NV16 ('422v'), which FFmpeg 5.1's
+            // swscale can't read (exports and RGBA would fail). For 8-bit sources VideoToolbox
+            // converts its own 8-bit buffer to it, and that changes some chroma samples at
+            // edges (~4% of them on the fixture; NV16 would have FFmpeg's samples exactly).
+            return AV_PIX_FMT_P210;
+        case 3:
+            // 'x444'/'xf44', '444v'/'444f'
+            return bit_depth > 8 ? AV_PIX_FMT_P410 : AV_PIX_FMT_NV24;
+        default:
+            // 4:2:0, and monochrome (VideoToolbox gives it grey chroma, as FFmpeg's decoders
+            // do): 'x420'/'xf20', '420v'/'420f'
+            return bit_depth > 8 ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+    }
+}
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
     CFNumberRef number;
@@ -98,7 +132,8 @@ static void dict_set_object(CFMutableDictionaryRef dict, CFStringRef key, CFType
     CFDictionarySetValue(dict, key, value);
 }
 
-VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callback, void *callback_context) {
+// `chroma_format_idc` and `bit_depth`: the output asked for (see `vt_output_format`)
+VTDecoder *vt_decoder_create(AVCodecParameters *params, int chroma_format_idc, int bit_depth, RustFrameCallback callback, void *callback_context) {
     int width = params->width;
     int height = params->height;
     int extradata_size = params->extradata_size;
@@ -136,14 +171,14 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     // Its own idea of the range is the bitstream's (an H.264 SPS's VUI; limited where that's
     // silent, whatever the description says), which is the frames' range but where only the
     // container signals full range: `didDecompress` tags each frame.
-    bool is_10bit = params->bits_per_raw_sample > 8
-                 || params->profile == FF_PROFILE_HEVC_MAIN_10;
-    if (is_10bit) {
-        decoder->output_pixel_formats[0] = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
-        decoder->output_pixel_formats[1] = kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
-    } else {
-        decoder->output_pixel_formats[0] = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-        decoder->output_pixel_formats[1] = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+    enum AVPixelFormat sw_format = vt_output_format(params, chroma_format_idc, bit_depth);
+    decoder->output_pixel_formats[0] = av_map_videotoolbox_format_from_pixfmt2(sw_format, false);
+    decoder->output_pixel_formats[1] = av_map_videotoolbox_format_from_pixfmt2(sw_format, true);
+    if (!decoder->output_pixel_formats[0] || !decoder->output_pixel_formats[1]) {
+        // FFmpeg built without that format (an old SDK): 4:2:0 at the source's bit depth
+        sw_format = bit_depth > 8 ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+        decoder->output_pixel_formats[0] = av_map_videotoolbox_format_from_pixfmt2(sw_format, false);
+        decoder->output_pixel_formats[1] = av_map_videotoolbox_format_from_pixfmt2(sw_format, true);
     }
 
     // Determine codec type and extradata atom name based on codec_id
@@ -250,7 +285,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
 
     AVHWFramesContext *frames_ctx = (AVHWFramesContext *)decoder->hw_frames_ref->data;
     frames_ctx->format = AV_PIX_FMT_VIDEOTOOLBOX;
-    frames_ctx->sw_format = is_10bit ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+    frames_ctx->sw_format = sw_format;
     frames_ctx->width = width;
     frames_ctx->height = height;
 
@@ -510,8 +545,7 @@ static void didDecompress(void *decompressionOutputRefCon,
     frame->color_primaries = decoder->params->color_primaries;
     frame->color_trc = decoder->params->color_trc;
     OSType buffer_format = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    if (buffer_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        || buffer_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+    if (buffer_format == decoder->output_pixel_formats[1]
         || decoder->params->color_range == AVCOL_RANGE_JPEG) {
         frame->color_range = AVCOL_RANGE_JPEG;
     } else {

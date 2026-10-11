@@ -48,6 +48,20 @@ pub enum HardwareAccel {
     Required,
 }
 
+/// What Recut's own VideoToolbox decoder (macOS, H.264 and HEVC) gives its frames in. The
+/// other decoders (software, FFmpeg's hardware decoders) always give the source's own layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoToolboxOutput {
+    /// 8-bit 4:2:0 (NV12), or 10-bit 4:2:0 (P010) for HEVC Main 10, whatever the source is:
+    /// VideoToolbox converts
+    #[default]
+    Yuv420,
+    /// The source's own layout, from its SPS: its `chroma_format_idc` (0 monochrome, 1 4:2:0,
+    /// 2 4:2:2, 3 4:4:4) and bit depth. 8-bit 4:2:0 as NV12, deeper 4:2:0 as P010, 4:2:2 as
+    /// P210 (10-bit, also for 8-bit sources), 4:4:4 as NV24 or P410; over 10 bits as 10.
+    Source { chroma_format_idc: u32, bit_depth: u32 },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeBackend {
     Software,
@@ -84,6 +98,7 @@ pub struct VideoDecoderBuilder {
     time_base: TimeBase,
     rotation: f64,
     hardware_accel: HardwareAccel,
+    videotoolbox_output: VideoToolboxOutput,
 
     enable_reordering: bool,
     decode_backend: DecodeBackend,
@@ -105,6 +120,7 @@ impl VideoDecoderBuilder {
             time_base,
             rotation: 0.0,
             hardware_accel: HardwareAccel::Disabled,
+            videotoolbox_output: VideoToolboxOutput::default(),
             enable_reordering: false,
             decode_backend: DecodeBackend::Software,
             thread_count: None,
@@ -229,6 +245,12 @@ impl VideoDecoderBuilder {
         self
     }
 
+    /// What Recut's VideoToolbox decoder gives its frames in, when it's the one made (macOS)
+    pub fn with_videotoolbox_output(mut self, output: VideoToolboxOutput) -> Self {
+        self.videotoolbox_output = output;
+        self
+    }
+
     /// Get the codec parameters.
     pub fn codec_parameters(&self) -> VideoCodecParameters {
         let ptr = unsafe { super::ffw_decoder_get_codec_parameters(self.ptr) };
@@ -333,7 +355,11 @@ impl VideoDecoderBuilder {
         {
             if !Self::test_env_flag("RECUT_SKIP_CUSTOM_VIDEOTOOLBOX") {
                 let params = self.codec_parameters();
-                match videotoolbox::VTDecoder::new(&params, self.time_base) {
+                match videotoolbox::VTDecoder::new(
+                    &params,
+                    self.time_base,
+                    self.videotoolbox_output,
+                ) {
                     Ok(decoder) => {
                         self.vt_decoder = Some(decoder);
                         self.decode_backend = DecodeBackend::VideoToolbox;

@@ -9,6 +9,8 @@ use crate::packet::Packet;
 use crate::time::TimeBase;
 use crate::{codec::VideoCodecParameters, Error};
 
+use super::VideoToolboxOutput;
+
 pub struct DecodedFrame {
     pub(crate) av_frame: *mut c_void, // AVFrame pointer from C
 }
@@ -54,6 +56,8 @@ extern "C" {
     fn ffw_frame_free(frame: *mut c_void);
     pub(crate) fn vt_decoder_create(
         av_codec_context: *const c_void,
+        chroma_format_idc: i32,
+        bit_depth: i32,
         callback: RustFrameCallback,
         callback_context: *mut c_void,
     ) -> *mut c_void;
@@ -116,7 +120,12 @@ impl DecodedFrame {
 }
 
 impl VTDecoder {
-    pub fn new(params: &VideoCodecParameters, time_base: TimeBase) -> Result<VTDecoder, Error> {
+    /// A decoder of the stream `params` describes, giving its frames in `output`'s layout
+    pub fn new(
+        params: &VideoCodecParameters,
+        time_base: TimeBase,
+        output: VideoToolboxOutput,
+    ) -> Result<VTDecoder, Error> {
         // TODO NEXT: Maybe use a channel to send packets to the decoder? (and put the decoder in a separate thread)
         // Gotta fix the issue where it either freezes (using .recv()) or decodes infinitely-ish (using .try_recv()).
         // This might just be a mismatch between sync and async methods of decoding and it might not be possible to
@@ -128,9 +137,18 @@ impl VTDecoder {
         let sender_box = Box::new(frame_tx.clone());
         let sender_ptr = Box::into_raw(sender_box);
 
+        let (chroma_format_idc, bit_depth) = match output {
+            VideoToolboxOutput::Yuv420 => (-1, 0),
+            VideoToolboxOutput::Source {
+                chroma_format_idc,
+                bit_depth,
+            } => (chroma_format_idc as i32, bit_depth as i32),
+        };
         let vt_decoder_ptr = unsafe {
             vt_decoder_create(
                 params.as_ptr(),
+                chroma_format_idc,
+                bit_depth,
                 rust_frame_callback,
                 sender_ptr as *mut c_void,
             )
