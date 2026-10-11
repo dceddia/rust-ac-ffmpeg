@@ -59,7 +59,9 @@ typedef struct VTDecoder {
     uint64_t generation;  // Incremented on flush/seek to filter stale async frames
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
-    OSType output_pixel_format;   // NV12 (8-bit) or P010 (10-bit)
+    // The pixel buffers VideoToolbox may give: NV12 (8-bit) or P010 (10-bit), in video range
+    // and in full range
+    OSType output_pixel_formats[2];
 } VTDecoder;
 
 static void dict_set_i32(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
@@ -118,12 +120,25 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
     decoder->generation = 0;
-    // Choose output pixel format based on bit depth
+    // The range the stream's samples are in, as FFmpeg's decoder tags its frames (the caller
+    // gives parameters with the SPS's colors where it signals them, else the container's)
+    bool full_range = params->color_range == AVCOL_RANGE_JPEG;
+
+    // VideoToolbox is offered pixel buffers in either range and picks the one its decoder works
+    // in, so it hands the samples over as they are. Asked for one range, it converts video in
+    // the other (a full-range stream asked for video-range buffers came out range-compressed).
+    // Its own idea of the range is the bitstream's (an H.264 SPS's VUI; limited where that's
+    // silent, whatever the description says), which is the frames' range but where only the
+    // container signals full range: `didDecompress` tags each frame.
     bool is_10bit = params->bits_per_raw_sample > 8
                  || params->profile == FF_PROFILE_HEVC_MAIN_10;
-    decoder->output_pixel_format = is_10bit
-        ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-        : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    if (is_10bit) {
+        decoder->output_pixel_formats[0] = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
+        decoder->output_pixel_formats[1] = kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
+    } else {
+        decoder->output_pixel_formats[0] = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+        decoder->output_pixel_formats[1] = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+    }
 
     // Determine codec type and extradata atom name based on codec_id
     CMVideoCodecType codecType;
@@ -160,7 +175,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     /* Extensions dict */
     dict_set_string(extensions, CFSTR ("CVImageBufferChromaLocationBottomField"), "left");
     dict_set_string(extensions, CFSTR ("CVImageBufferChromaLocationTopField"), "left");
-    dict_set_boolean(extensions, CFSTR("FullRangeVideo"), false);
+    dict_set_boolean(extensions, CFSTR("FullRangeVideo"), full_range);
     dict_set_object(extensions, CFSTR ("CVPixelAspectRatio"), (CFTypeRef *) par);
     dict_set_object(extensions, CFSTR ("SampleDescriptionExtensionAtoms"), (CFTypeRef *) atoms);
 
@@ -179,7 +194,15 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     VTDecompressionOutputCallbackRecord outputCallback;
 
     destinationPixelBufferAttributes = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferPixelFormatTypeKey, decoder->output_pixel_format);
+    CFNumberRef formats[2] = {
+        CFNumberCreate(NULL, kCFNumberSInt32Type, &decoder->output_pixel_formats[0]),
+        CFNumberCreate(NULL, kCFNumberSInt32Type, &decoder->output_pixel_formats[1]),
+    };
+    CFArrayRef formatArray = CFArrayCreate(NULL, (const void **)formats, 2, &kCFTypeArrayCallBacks);
+    CFDictionarySetValue(destinationPixelBufferAttributes, kCVPixelBufferPixelFormatTypeKey, formatArray);
+    CFRelease(formatArray);
+    CFRelease(formats[0]);
+    CFRelease(formats[1]);
     dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferWidthKey, width);
     dict_set_i32(destinationPixelBufferAttributes, kCVPixelBufferHeightKey, height);
     dict_set_boolean(destinationPixelBufferAttributes, kCVPixelBufferMetalCompatibilityKey, true);
@@ -465,15 +488,19 @@ static void didDecompress(void *decompressionOutputRefCon,
         frame->hw_frames_ctx = av_buffer_ref(decoder->hw_frames_ref);
     }
 
-    // Set color information from codec parameters
-    frame->color_range = decoder->params->color_range;
+    // The frame's colors: the stream's, as FFmpeg's decoder would tag them. A full-range
+    // buffer holds a stream that signals full range in its bitstream, which FFmpeg follows too;
+    // a video-range one holds the samples as they are, in whatever range the stream is.
     frame->colorspace = decoder->params->color_space;
     frame->color_primaries = decoder->params->color_primaries;
     frame->color_trc = decoder->params->color_trc;
-
-    // VideoToolbox outputs video range by default, so if unspecified, assume video range
-    if (frame->color_range == AVCOL_RANGE_UNSPECIFIED) {
-        frame->color_range = AVCOL_RANGE_MPEG;  // Video range (16-235)
+    OSType buffer_format = CVPixelBufferGetPixelFormatType(pixelBuffer);
+    if (buffer_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        || buffer_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+        || decoder->params->color_range == AVCOL_RANGE_JPEG) {
+        frame->color_range = AVCOL_RANGE_JPEG;
+    } else {
+        frame->color_range = AVCOL_RANGE_MPEG;
     }
 
     // Set timing information

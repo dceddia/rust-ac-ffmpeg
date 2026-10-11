@@ -176,6 +176,13 @@ void ffw_codec_parameters_set_height(AVCodecParameters* params, int height) {
     params->height = height;
 }
 
+void ffw_codec_parameters_set_color_properties(AVCodecParameters* params, int range, int space, int trc, int primaries) {
+    params->color_range = range;
+    params->color_space = space;
+    params->color_trc = trc;
+    params->color_primaries = primaries;
+}
+
 void ffw_codec_parameters_set_sample_rate(AVCodecParameters* params, int sample_rate) {
     params->sample_rate = sample_rate;
 }

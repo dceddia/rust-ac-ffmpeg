@@ -3,7 +3,7 @@
 use std::os::raw::{c_int, c_void};
 
 use crate::{
-    codec::video::{PixelFormat, VideoFrame},
+    codec::video::{PixelFormat, VideoFrame, AVCOL_RANGE_UNSPECIFIED, AVCOL_SPC_UNSPECIFIED},
     Error,
 };
 
@@ -21,6 +21,8 @@ extern "C" {
         theight: c_int,
         flags: c_int,
         align: c_int,
+        target_range: c_int,
+        target_colorspace: c_int,
     ) -> *mut c_void;
 
     fn ffw_frame_scaler_scale(scaler: *mut c_void, src: *const c_void) -> *mut c_void;
@@ -62,6 +64,10 @@ pub struct VideoFrameScalerBuilder {
     flags: c_int,
 
     alignment: c_int,
+
+    target_range: c_int,
+
+    target_colorspace: c_int,
 }
 
 impl VideoFrameScalerBuilder {
@@ -84,6 +90,10 @@ impl VideoFrameScalerBuilder {
 
             // Default alignment of `0` means libav will choose the optimal alignment
             alignment: 0,
+
+            target_range: AVCOL_RANGE_UNSPECIFIED as c_int,
+
+            target_colorspace: AVCOL_SPC_UNSPECIFIED as c_int,
         }
     }
 
@@ -142,6 +152,27 @@ impl VideoFrameScalerBuilder {
         self
     }
 
+    /// The range of the output frames when they're YUV or gray (`AVCOL_RANGE_MPEG` or
+    /// `AVCOL_RANGE_JPEG`): each frame is converted from its own range (its tag, or its "J"
+    /// format) to this one, and tagged with it. `AVCOL_RANGE_UNSPECIFIED` (the default) keeps
+    /// each frame's range. RGB output is always full range.
+    pub fn target_color_range(mut self, range: u32) -> Self {
+        self.target_range = range as _;
+
+        self
+    }
+
+    /// The matrix of the output frames when they're YUV (an `AVCOL_SPC_*` value): each frame in
+    /// another matrix is converted to it (swscale goes through RGB for that) and tagged with
+    /// it. A frame whose matrix is unspecified, or one swscale doesn't know, keeps its own, as
+    /// it does when swscale can't convert between the formats. `AVCOL_SPC_UNSPECIFIED` (the
+    /// default) keeps each frame's matrix.
+    pub fn target_colorspace(mut self, colorspace: u32) -> Self {
+        self.target_colorspace = colorspace as _;
+
+        self
+    }
+
     /// Build the video frame scaler.
     pub fn build(self) -> Result<VideoFrameScaler, Error> {
         let tformat = self.tformat.unwrap_or(self.sformat);
@@ -170,6 +201,8 @@ impl VideoFrameScalerBuilder {
                 self.theight,
                 self.flags,
                 self.alignment,
+                self.target_range,
+                self.target_colorspace,
             )
         };
 

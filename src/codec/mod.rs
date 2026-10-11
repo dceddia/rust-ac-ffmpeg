@@ -48,6 +48,13 @@ extern "C" {
     fn ffw_codec_parameters_set_format(params: *mut c_void, format: c_int);
     fn ffw_codec_parameters_set_width(params: *mut c_void, width: c_int);
     fn ffw_codec_parameters_set_height(params: *mut c_void, height: c_int);
+    fn ffw_codec_parameters_set_color_properties(
+        params: *mut c_void,
+        range: c_int,
+        space: c_int,
+        trc: c_int,
+        primaries: c_int,
+    );
     fn ffw_codec_parameters_set_sample_rate(params: *mut c_void, rate: c_int);
     fn ffw_codec_parameters_set_channel_layout(params: *mut c_void, layout: *const c_void)
         -> c_int;
@@ -703,6 +710,22 @@ impl VideoCodecParametersBuilder {
     pub fn height(self, height: usize) -> Self {
         unsafe {
             ffw_codec_parameters_set_height(self.inner.ptr, height as _);
+        }
+
+        self
+    }
+
+    /// Set the color range, matrix, transfer characteristic and primaries (the `AVCOL_*`
+    /// values).
+    pub fn color_properties(self, range: u32, space: u32, transfer: u32, primaries: u32) -> Self {
+        unsafe {
+            ffw_codec_parameters_set_color_properties(
+                self.inner.ptr,
+                range as _,
+                space as _,
+                transfer as _,
+                primaries as _,
+            );
         }
 
         self
