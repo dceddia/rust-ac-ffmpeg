@@ -9,6 +9,7 @@ use crate::packet::Packet;
 use crate::time::TimeBase;
 use crate::{codec::VideoCodecParameters, Error};
 
+use super::frame::VideoFrame;
 use super::VideoToolboxOutput;
 
 pub struct DecodedFrame {
@@ -70,6 +71,66 @@ extern "C" {
     pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void) -> u64;
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
     fn vt_decoder_uses_hardware(decoder: *mut c_void) -> i32;
+    fn vt_frame_pixel_format(frame: *const c_void) -> u32;
+    fn vt_frame_tag_for_encoder(
+        frame: *mut c_void,
+        primaries: i32,
+        transfer: i32,
+        space: i32,
+    ) -> i32;
+}
+
+/// CoreVideo's 8-bit 4:2:0 biplanar (NV12) pixel format in video range, `'420v'`
+pub const CV_PIXEL_FORMAT_420V: u32 = u32::from_be_bytes(*b"420v");
+/// CoreVideo's 8-bit 4:2:0 biplanar (NV12) pixel format in full range, `'420f'`
+pub const CV_PIXEL_FORMAT_420F: u32 = u32::from_be_bytes(*b"420f");
+
+/// The CoreVideo pixel format (e.g. [`CV_PIXEL_FORMAT_420V`]) of a VideoToolbox frame's
+/// CVPixelBuffer, or None if the frame isn't one
+pub fn cv_pixel_format(frame: &VideoFrame) -> Option<u32> {
+    let format = unsafe { vt_frame_pixel_format(frame.as_ptr()) };
+    (format != 0).then_some(format)
+}
+
+/// Whether FFmpeg's VideoToolbox encoders can be given VideoToolbox frames
+/// ([`tag_for_encoder`]) at these colors (FFmpeg's constants): any but a gamma, PQ, HLG or
+/// linear transfer function (which FFmpeg 5.1 maps with a gamma level or only on newer SDKs)
+pub fn encoder_takes_colors(primaries: u32, transfer: u32, space: u32) -> bool {
+    unsafe {
+        vt_frame_tag_for_encoder(
+            std::ptr::null_mut(),
+            primaries as i32,
+            transfer as i32,
+            space as i32,
+        ) == 0
+    }
+}
+
+/// Tags a VideoToolbox frame's CVPixelBuffer for FFmpeg's VideoToolbox encoder opened at these
+/// colors (FFmpeg's constants), as the encoder tags the buffers it fills itself: its color
+/// primaries, transfer function and matrix attachments become the encoder's (removed where the
+/// encoder gives none). The buffer is changed in place, for every frame that shares it.
+pub fn tag_for_encoder(
+    frame: &VideoFrame,
+    primaries: u32,
+    transfer: u32,
+    space: u32,
+) -> Result<(), Error> {
+    let tagged = unsafe {
+        vt_frame_tag_for_encoder(
+            frame.as_ptr() as *mut c_void,
+            primaries as i32,
+            transfer as i32,
+            space as i32,
+        )
+    };
+    if tagged == 0 {
+        Ok(())
+    } else {
+        Err(Error::new(
+            "not a VideoToolbox frame, or colors VideoToolbox's encoder doesn't take",
+        ))
+    }
 }
 
 // This is the Rust callback that will be called from C

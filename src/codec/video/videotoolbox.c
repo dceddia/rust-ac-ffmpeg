@@ -605,3 +605,88 @@ uint64_t vt_decoder_flush_buffers(VTDecoder *decoder) {
     decoder->reset_pending = 1;
     return __atomic_add_fetch(&decoder->generation, 1, __ATOMIC_ACQ_REL);
 }
+
+// The CoreVideo pixel format ('420v', '420f', ...) of a VideoToolbox frame's CVPixelBuffer, or 0
+// if the frame isn't one
+uint32_t vt_frame_pixel_format(const AVFrame *frame) {
+    if (!frame || frame->format != AV_PIX_FMT_VIDEOTOOLBOX || !frame->data[3]) {
+        return 0;
+    }
+    return CVPixelBufferGetPixelFormatType((CVPixelBufferRef)frame->data[3]);
+}
+
+// The CoreVideo color attachments FFmpeg 5.1's VideoToolbox encoder (videotoolboxenc.c,
+// `get_cv_color_primaries`, `get_cv_transfer_function`, `get_cv_ycbcr_matrix`) gives the
+// buffers it fills, and the session, for these FFmpeg colors: NULL where it gives none (colors
+// it has no CoreVideo constant for get none, with an error in its log). Returns -1 for a gamma
+// transfer function (it gives a gamma level too) and the ones it has only with newer SDKs.
+static int vt_encoder_color_attachments(int primaries, int transfer, int space,
+                                        CFStringRef *cv_primaries, CFStringRef *cv_transfer,
+                                        CFStringRef *cv_matrix) {
+    switch (primaries) {
+        case AVCOL_PRI_UNSPECIFIED: *cv_primaries = NULL; break;
+        case AVCOL_PRI_BT470BG: *cv_primaries = kCVImageBufferColorPrimaries_EBU_3213; break;
+        case AVCOL_PRI_SMPTE170M: *cv_primaries = kCVImageBufferColorPrimaries_SMPTE_C; break;
+        case AVCOL_PRI_BT709: *cv_primaries = kCVImageBufferColorPrimaries_ITU_R_709_2; break;
+        case AVCOL_PRI_BT2020: *cv_primaries = kCVImageBufferColorPrimaries_ITU_R_2020; break;
+        default: *cv_primaries = NULL; break;
+    }
+    switch (transfer) {
+        case AVCOL_TRC_UNSPECIFIED: *cv_transfer = NULL; break;
+        case AVCOL_TRC_BT709: *cv_transfer = kCVImageBufferTransferFunction_ITU_R_709_2; break;
+        case AVCOL_TRC_SMPTE240M: *cv_transfer = kCVImageBufferTransferFunction_SMPTE_240M_1995; break;
+        case AVCOL_TRC_BT2020_10:
+        case AVCOL_TRC_BT2020_12: *cv_transfer = kCVImageBufferTransferFunction_ITU_R_2020; break;
+        case AVCOL_TRC_GAMMA22:
+        case AVCOL_TRC_GAMMA28:
+        case AVCOL_TRC_SMPTE2084:
+        case AVCOL_TRC_LINEAR:
+        case AVCOL_TRC_ARIB_STD_B67: return -1;
+        default: *cv_transfer = NULL; break;
+    }
+    switch (space) {
+        case AVCOL_SPC_UNSPECIFIED: *cv_matrix = NULL; break;
+        case AVCOL_SPC_BT709: *cv_matrix = kCVImageBufferYCbCrMatrix_ITU_R_709_2; break;
+        case AVCOL_SPC_BT470BG:
+        case AVCOL_SPC_SMPTE170M: *cv_matrix = kCVImageBufferYCbCrMatrix_ITU_R_601_4; break;
+        case AVCOL_SPC_SMPTE240M: *cv_matrix = kCVImageBufferYCbCrMatrix_SMPTE_240M_1995; break;
+        case AVCOL_SPC_BT2020_NCL: *cv_matrix = kCVImageBufferYCbCrMatrix_ITU_R_2020; break;
+        default: *cv_matrix = NULL; break;
+    }
+    return 0;
+}
+
+// Tags a VideoToolbox frame's CVPixelBuffer with exactly the color attachments FFmpeg's
+// VideoToolbox encoder gives its own buffers and session at these colors (primaries, transfer
+// function and matrix; the ones it gives none of, and a gamma level, removed), so the encoder
+// sees the buffer as one it filled itself. With a NULL frame, only says whether it can.
+// Returns 0, or -1 for the transfer functions above or a frame that isn't VideoToolbox's.
+int vt_frame_tag_for_encoder(AVFrame *frame, int primaries, int transfer, int space) {
+    CFStringRef cv_primaries, cv_transfer, cv_matrix;
+    if (vt_encoder_color_attachments(primaries, transfer, space,
+                                     &cv_primaries, &cv_transfer, &cv_matrix) < 0) {
+        return -1;
+    }
+    if (!frame) {
+        return 0;
+    }
+    if (frame->format != AV_PIX_FMT_VIDEOTOOLBOX || !frame->data[3]) {
+        return -1;
+    }
+    CVBufferRef buffer = (CVBufferRef)frame->data[3];
+    const CFStringRef keys[3] = {
+        kCVImageBufferColorPrimariesKey,
+        kCVImageBufferTransferFunctionKey,
+        kCVImageBufferYCbCrMatrixKey,
+    };
+    const CFStringRef values[3] = { cv_primaries, cv_transfer, cv_matrix };
+    for (int i = 0; i < 3; i++) {
+        if (values[i]) {
+            CVBufferSetAttachment(buffer, keys[i], values[i], kCVAttachmentMode_ShouldPropagate);
+        } else {
+            CVBufferRemoveAttachment(buffer, keys[i]);
+        }
+    }
+    CVBufferRemoveAttachment(buffer, kCVImageBufferGammaLevelKey);
+    return 0;
+}

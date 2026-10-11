@@ -857,6 +857,7 @@ pub struct VideoEncoderBuilder {
     time_base: TimeBase,
 
     format: Option<PixelFormat>,
+    sw_format: Option<PixelFormat>,
     width: Option<usize>,
     height: Option<usize>,
     max_b_frames: Option<usize>,
@@ -888,6 +889,7 @@ impl VideoEncoderBuilder {
             time_base: TimeBase::MICROSECONDS,
 
             format: None,
+            sw_format: None,
             width: None,
             height: None,
             max_b_frames: None,
@@ -938,6 +940,7 @@ impl VideoEncoderBuilder {
             time_base: TimeBase::MICROSECONDS,
 
             format: Some(pixel_format),
+            sw_format: None,
             width: Some(width),
             height: Some(height),
             max_b_frames: Some(max_b_frames),
@@ -989,6 +992,15 @@ impl VideoEncoderBuilder {
     /// Set encoder pixel format.
     pub fn pixel_format(mut self, format: PixelFormat) -> Self {
         self.format = Some(format);
+        self
+    }
+
+    /// Set the format of the pictures in a hardware pixel format's frames (FFmpeg's
+    /// `sw_pix_fmt`): e.g. NV12 for VideoToolbox frames (`AV_PIX_FMT_VIDEOTOOLBOX`) that hold
+    /// 8-bit 4:2:0 CVPixelBuffers. An encoder opened for a hardware pixel format takes only
+    /// frames in it.
+    pub fn sw_pixel_format(mut self, format: PixelFormat) -> Self {
+        self.sw_format = Some(format);
         self
     }
 
@@ -1050,6 +1062,9 @@ impl VideoEncoderBuilder {
         unsafe {
             super::ffw_encoder_set_time_base(self.ptr, tb.num() as _, tb.den() as _);
             super::ffw_encoder_set_pixel_format(self.ptr, format.into_raw());
+            if let Some(sw_format) = self.sw_format {
+                super::ffw_encoder_set_sw_pixel_format(self.ptr, sw_format.into_raw());
+            }
             super::ffw_encoder_set_width(self.ptr, width as _);
             super::ffw_encoder_set_height(self.ptr, height as _);
             super::ffw_encoder_set_max_b_frames(self.ptr, max_b_frames as _);

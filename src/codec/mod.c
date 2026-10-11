@@ -606,6 +606,7 @@ int ffw_encoder_get_sample_rate(const Encoder* encoder);
 void ffw_encoder_set_time_base(Encoder* encoder, int num, int den);
 void ffw_encoder_set_bit_rate(Encoder* encoder, int64_t bit_rate);
 void ffw_encoder_set_pixel_format(Encoder* encoder, int format);
+void ffw_encoder_set_sw_pixel_format(Encoder* encoder, int format);
 void ffw_encoder_set_width(Encoder* encoder, int width);
 void ffw_encoder_set_height(Encoder* encoder, int height);
 void ffw_encoder_set_color_range(Encoder* encoder, int value);
@@ -786,6 +787,10 @@ void ffw_encoder_set_bit_rate(Encoder* encoder, int64_t bit_rate) {
 
 void ffw_encoder_set_pixel_format(Encoder* encoder, int format) {
     encoder->cc->pix_fmt = format;
+}
+
+void ffw_encoder_set_sw_pixel_format(Encoder* encoder, int format) {
+    encoder->cc->sw_pix_fmt = format;
 }
 
 void ffw_encoder_set_width(Encoder* encoder, int width) {

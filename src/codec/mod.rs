@@ -107,6 +107,7 @@ extern "C" {
     fn ffw_encoder_set_time_base(encoder: *mut c_void, num: c_int, den: c_int);
     fn ffw_encoder_set_bit_rate(encoder: *mut c_void, bit_rate: i64);
     fn ffw_encoder_set_pixel_format(encoder: *mut c_void, format: c_int);
+    fn ffw_encoder_set_sw_pixel_format(encoder: *mut c_void, format: c_int);
     fn ffw_encoder_set_width(encoder: *mut c_void, width: c_int);
     fn ffw_encoder_set_height(encoder: *mut c_void, height: c_int);
     fn ffw_encoder_set_color_range(encoder: *mut c_void, value: c_int);
