@@ -38,7 +38,8 @@ static void vthw_buffer_release(void *opaque, uint8_t *data)
 // frame: the decoded frame, or NULL on error/skip
 // status: 0 on success, OSStatus error code on failure
 // pts: presentation timestamp of the frame/error
-typedef void (*RustFrameCallback)(void *context, AVFrame *frame, int32_t status, int64_t pts);
+// `generation` is the decoder's generation when the packet was pushed (see `generation`)
+typedef void (*RustFrameCallback)(void *context, AVFrame *frame, int32_t status, int64_t pts, uint64_t generation);
 
 static void didDecompress(
     void *decompressionOutputRefCon,
@@ -56,7 +57,9 @@ typedef struct VTDecoder {
     VTDecompressionSessionRef decompressSession;
     RustFrameCallback rust_callback;
     void *rust_context;
-    uint64_t generation;  // Incremented on flush/seek to filter stale async frames
+    // Incremented on flush/seek to filter stale async frames. Each frame's callback carries
+    // the generation it was pushed in, so the Rust side drops stale ones whenever they arrive.
+    uint64_t generation;
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
     // The pixel buffers VideoToolbox may give: NV12 (8-bit) or P010 (10-bit), in video range
@@ -350,7 +353,8 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
 
     VTDecodeInfoFlags flagOut = 0;
 
-    status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)decoder->generation, &flagOut);
+    uint64_t generation = __atomic_load_n(&decoder->generation, __ATOMIC_ACQUIRE);
+    status = VTDecompressionSessionDecodeFrame(decoder->decompressSession, sampleBuffer, flags, (void*)(uintptr_t)generation, &flagOut);
 
     switch (status) {
         case noErr:
@@ -394,7 +398,7 @@ static void didDecompress(void *decompressionOutputRefCon,
     // from a previous generation leak into the channel and get misattributed
     // to the current decode cycle.
     uint64_t frame_generation = (uint64_t)(uintptr_t)sourceFrameRefCon;
-    if (frame_generation != decoder->generation) {
+    if (frame_generation != __atomic_load_n(&decoder->generation, __ATOMIC_ACQUIRE)) {
         return;
     }
 
@@ -416,7 +420,7 @@ static void didDecompress(void *decompressionOutputRefCon,
       (infoFlags & kVTDecodeInfo_FrameDropped) != 0
     ) {
         // Report as skipped, not error
-        decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
+        decoder->rust_callback(decoder->rust_context, NULL, 0, pts, frame_generation);
         return;
     }
 
@@ -427,23 +431,23 @@ static void didDecompress(void *decompressionOutputRefCon,
         switch (status) {
             case kVTVideoDecoderReferenceMissingErr:  // -17694: missing reference frame
                 printf("VT: kVTVideoDecoderReferenceMissingErr status=%d pts=%lld\n", (int)status, (long long)pts);
-                decoder->rust_callback(decoder->rust_context, NULL, 0, pts);  // Report as skipped, not error
+                decoder->rust_callback(decoder->rust_context, NULL, 0, pts, frame_generation);  // Report as skipped, not error
                 return;
             case kVTVideoDecoderBadDataErr:  // -12909: corrupted frame data
                 printf("VT: kVTVideoDecoderBadDataErr status=%d pts=%lld\n", (int)status, (long long)pts);
-                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
+                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts, frame_generation);
                 return;
             default:
                 // Hard error - report to Rust for potential fallback
                 printf("VT: didDecompress error status=%d pts=%lld\n", (int)status, (long long)pts);
-                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts);
+                decoder->rust_callback(decoder->rust_context, NULL, (int32_t)status, pts, frame_generation);
                 return;
         }
     }
 
     // Call the Rust callback with NULL if pixelBuffer is NULL (for DoNotDisplay frames)
     if (pixelBuffer == NULL) {
-        decoder->rust_callback(decoder->rust_context, NULL, 0, pts);
+        decoder->rust_callback(decoder->rust_context, NULL, 0, pts, frame_generation);
         return;
     }
 
@@ -510,7 +514,7 @@ static void didDecompress(void *decompressionOutputRefCon,
     frame->time_base.den = presentationTimeStamp.timescale;
 
     // Call the Rust callback with success
-    decoder->rust_callback(decoder->rust_context, frame, 0, pts);
+    decoder->rust_callback(decoder->rust_context, frame, 0, pts, frame_generation);
 
     // Note: The Rust side is responsible for calling av_frame_free when done
 }
@@ -546,11 +550,12 @@ void vt_decoder_flush(VTDecoder *decoder) {
 }
 
 // Reset: discard all in-flight frames and prepare for new input (e.g. after seek).
-// Bumps generation so the callback filters out stale frames.
-void vt_decoder_flush_buffers(VTDecoder *decoder) {
+// Bumps the generation and returns the new one: the frames in flight still come out, with the
+// old one, and are dropped. It doesn't wait for them: the reads and seeking that come next can
+// go on while VideoToolbox finishes them.
+uint64_t vt_decoder_flush_buffers(VTDecoder *decoder) {
     if (!decoder) {
-        return;
+        return 0;
     }
-    decoder->generation++;
-    VTDecompressionSessionWaitForAsynchronousFrames(decoder->decompressSession);
+    return __atomic_add_fetch(&decoder->generation, 1, __ATOMIC_ACQ_REL);
 }

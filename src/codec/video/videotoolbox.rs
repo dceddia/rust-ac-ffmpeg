@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use log::{debug, trace, warn};
 
@@ -23,21 +23,32 @@ pub enum DecodeResult {
     Skipped { pts: i64 },
 }
 
+/// A result from VideoToolbox's callback, with the decoder's generation when its packet was
+/// pushed: results of a generation before the last `flush_buffers` are dropped
+type Generational = (u64, DecodeResult);
+
 pub struct VTDecoder {
     vt_decoder_ptr: *mut c_void,
     #[allow(dead_code)]
     time_base: TimeBase,
     #[allow(dead_code)]
-    frame_tx: std::sync::mpsc::Sender<DecodeResult>,
-    frame_rx: std::sync::mpsc::Receiver<DecodeResult>,
+    frame_tx: std::sync::mpsc::Sender<Generational>,
+    frame_rx: std::sync::mpsc::Receiver<Generational>,
+    /// The generation of the packets pushed since the last `flush_buffers`
+    generation: u64,
     /// A result `wait_for_result` took, for the next `take_result`
     waited: Option<DecodeResult>,
     // Store the raw pointer to the boxed sender so we can clean it up
-    sender_ptr: *mut std::sync::mpsc::Sender<DecodeResult>,
+    sender_ptr: *mut std::sync::mpsc::Sender<Generational>,
 }
 
-type RustFrameCallback =
-    unsafe extern "C" fn(context: *mut c_void, frame: *mut c_void, status: i32, pts: i64);
+type RustFrameCallback = unsafe extern "C" fn(
+    context: *mut c_void,
+    frame: *mut c_void,
+    status: i32,
+    pts: i64,
+    generation: u64,
+);
 
 extern "C" {
     fn ffw_frame_free(frame: *mut c_void);
@@ -52,7 +63,7 @@ extern "C" {
         reset_decoder: i32,
     ) -> i32;
     pub(crate) fn vt_decoder_flush(decoder: *mut c_void);
-    pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void);
+    pub(crate) fn vt_decoder_flush_buffers(decoder: *mut c_void) -> u64;
     pub(crate) fn vt_decoder_free(decoder: *mut c_void);
     fn vt_decoder_uses_hardware(decoder: *mut c_void) -> i32;
 }
@@ -63,24 +74,25 @@ unsafe extern "C" fn rust_frame_callback(
     frame: *mut c_void,
     status: i32,
     pts: i64,
+    generation: u64,
 ) {
-    let sender = &*(context as *const std::sync::mpsc::Sender<DecodeResult>);
+    let sender = &*(context as *const std::sync::mpsc::Sender<Generational>);
 
     // Check for decode error
     if status != 0 {
-        let _ = sender.send(DecodeResult::Error { status, pts });
+        let _ = sender.send((generation, DecodeResult::Error { status, pts }));
         return;
     }
 
     // NULL frame with success status means DoNotDisplay
     if frame.is_null() {
-        let _ = sender.send(DecodeResult::Skipped { pts });
+        let _ = sender.send((generation, DecodeResult::Skipped { pts }));
         return;
     }
 
     // Success - send the frame
     let decoded_frame = DecodedFrame { av_frame: frame };
-    let _ = sender.send(DecodeResult::Frame(decoded_frame));
+    let _ = sender.send((generation, DecodeResult::Frame(decoded_frame)));
 }
 
 impl Drop for DecodedFrame {
@@ -136,6 +148,7 @@ impl VTDecoder {
             time_base,
             frame_tx,
             frame_rx,
+            generation: 0,
             waited: None,
             vt_decoder_ptr,
             sender_ptr,
@@ -197,12 +210,18 @@ impl VTDecoder {
         if self.waited.is_some() {
             return true;
         }
-        match self.frame_rx.recv_timeout(timeout) {
-            Ok(result) => {
-                self.waited = Some(result);
-                true
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.frame_rx.recv_timeout(left) {
+                Ok((generation, result)) if generation == self.generation => {
+                    self.waited = Some(result);
+                    return true;
+                }
+                // from before the last flush
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return false,
             }
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => false,
         }
     }
 
@@ -239,7 +258,7 @@ impl VTDecoder {
     pub fn take_result(&mut self) -> Result<Option<DecodeResult>, Error> {
         let received = match self.waited.take() {
             Some(result) => Ok(result),
-            None => self.frame_rx.try_recv(),
+            None => self.try_receive(),
         };
         match received {
             Ok(result) => {
@@ -257,6 +276,16 @@ impl VTDecoder {
         }
     }
 
+    /// The next result VideoToolbox gave since the last flush, if it has given one
+    fn try_receive(&mut self) -> Result<DecodeResult, TryRecvError> {
+        loop {
+            let (generation, result) = self.frame_rx.try_recv()?;
+            if generation == self.generation {
+                return Ok(result);
+            }
+        }
+    }
+
     /// The error for a packet VideoToolbox couldn't decode
     pub fn decode_error(status: i32, pts: i64) -> Error {
         Error::new(format!(
@@ -265,12 +294,14 @@ impl VTDecoder {
         ))
     }
 
+    /// Forget the packets pushed so far: their results are dropped, whenever they come. It
+    /// doesn't wait for VideoToolbox to finish them (a seek's reading and seeking go on
+    /// meanwhile).
     pub fn flush_buffers(&mut self) {
         debug!("VideoToolbox: flush_buffers (reset)");
-        // Bump generation and wait — callback will drop stale frames.
-        unsafe { vt_decoder_flush_buffers(self.vt_decoder_ptr) };
-        // Drain anything that made it into the channel before the generation bump.
+        self.generation = unsafe { vt_decoder_flush_buffers(self.vt_decoder_ptr) };
         self.waited = None;
+        // what came in already (the rest is dropped as it's taken)
         while self.frame_rx.try_recv().is_ok() {}
     }
 }
