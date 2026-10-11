@@ -60,6 +60,8 @@ typedef struct VTDecoder {
     // Incremented on flush/seek to filter stale async frames. Each frame's callback carries
     // the generation it was pushed in, so the Rust side drops stale ones whenever they arrive.
     uint64_t generation;
+    // Set by a flush: the next sample is decoded from a reset decoder (see vt_decode_frame)
+    int reset_pending;
     AVBufferRef *hw_device_ref;   // Hardware device context
     AVBufferRef *hw_frames_ref;   // Hardware frames context
     // The pixel buffers VideoToolbox may give: NV12 (8-bit) or P010 (10-bit), in video range
@@ -123,6 +125,7 @@ VTDecoder *vt_decoder_create(AVCodecParameters *params, RustFrameCallback callba
     decoder->rust_callback = callback;
     decoder->rust_context = callback_context;
     decoder->generation = 0;
+    decoder->reset_pending = 0;
     // The range the stream's samples are in, as FFmpeg's decoder tags its frames (the caller
     // gives parameters with the SPS's colors where it signals them, else the container's)
     bool full_range = params->color_range == AVCOL_RANGE_JPEG;
@@ -293,8 +296,6 @@ void vt_decoder_free(VTDecoder *decoder) {
 }
 
 int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
-    (void)reset_decoder;
-
     CMBlockBufferRef blockBuffer = NULL;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, (void *)packet->data, packet->size, kCFAllocatorNull, NULL, 0, packet->size, 0, &blockBuffer);
     if (status != kCMBlockBufferNoErr) {
@@ -349,6 +350,16 @@ int vt_decode_frame(VTDecoder *decoder, AVPacket* packet, int reset_decoder) {
             CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_NotSync, kCFBooleanTrue);
             CFDictionarySetValue(sampleAttachments, kCMSampleAttachmentKey_DependsOnOthers, kCFBooleanTrue);
         }
+    }
+
+    // After a flush (a seek), the decoder starts over: VideoToolbox forgets the reference frames
+    // it holds, as FFmpeg's decoders do on a flush. Without it, a reused session decodes an
+    // H.264 open-GOP keyframe (an I-frame that isn't IDR) into a picture buffer that still holds
+    // frames from before the seek, and its sliding-window references (frame_num) then pick
+    // those: the frames after it come out wrong (x264's open GOPs).
+    if (reset_decoder || decoder->reset_pending) {
+        CMSetAttachment(sampleBuffer, kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding, kCFBooleanTrue, kCMAttachmentMode_ShouldNotPropagate);
+        decoder->reset_pending = 0;
     }
 
     VTDecodeInfoFlags flagOut = 0;
@@ -552,10 +563,11 @@ void vt_decoder_flush(VTDecoder *decoder) {
 // Reset: discard all in-flight frames and prepare for new input (e.g. after seek).
 // Bumps the generation and returns the new one: the frames in flight still come out, with the
 // old one, and are dropped. It doesn't wait for them: the reads and seeking that come next can
-// go on while VideoToolbox finishes them.
+// go on while VideoToolbox finishes them. The next sample pushed resets the decoder.
 uint64_t vt_decoder_flush_buffers(VTDecoder *decoder) {
     if (!decoder) {
         return 0;
     }
+    decoder->reset_pending = 1;
     return __atomic_add_fetch(&decoder->generation, 1, __ATOMIC_ACQ_REL);
 }

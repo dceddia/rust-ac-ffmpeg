@@ -296,7 +296,8 @@ impl VTDecoder {
 
     /// Forget the packets pushed so far: their results are dropped, whenever they come. It
     /// doesn't wait for VideoToolbox to finish them (a seek's reading and seeking go on
-    /// meanwhile).
+    /// meanwhile). The next packet pushed starts the decoder over: it forgets the reference
+    /// frames it holds (`ResetDecoderBeforeDecoding`), as FFmpeg's decoders do on a flush.
     pub fn flush_buffers(&mut self) {
         debug!("VideoToolbox: flush_buffers (reset)");
         self.generation = unsafe { vt_decoder_flush_buffers(self.vt_decoder_ptr) };
