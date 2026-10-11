@@ -555,6 +555,17 @@ impl VideoDecoder {
         self.decode_backend
     }
 
+    /// Whether Recut's VideoToolbox decoder decodes on the media engine (`Some(true)`) or in
+    /// software (`Some(false)`), as `VTDecoder::uses_hardware` says. `None` for the other
+    /// decoders, or if VideoToolbox doesn't say. VideoToolbox may settle on a decoder only once
+    /// it has seen the stream: ask after decoding some frames.
+    #[cfg(target_os = "macos")]
+    pub fn videotoolbox_uses_hardware(&self) -> Option<bool> {
+        self.vt_decoder
+            .as_ref()
+            .and_then(|vt_decoder| vt_decoder.uses_hardware())
+    }
+
     /// No frame shown before `pts` is wanted until the next flush (`enable_reordering`): after a
     /// seek, the frame at `pts` is the one to show, and the caller drops the frames before it.
     /// Those are dropped here, and the frame at `pts` comes out as soon as the decoder gives it,
