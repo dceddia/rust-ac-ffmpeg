@@ -138,6 +138,22 @@ impl<F> FrameOrder<F> {
         Some(self.ready.swap_remove(index).1)
     }
 
+    /// Whether the next frame to go out is one the decoder still has to give, and no more packets
+    /// are needed for it to go out: its packet went in, and so did a DTS that reaches it. Then
+    /// it goes out as soon as the decoder gives it (and the ones before it that are still
+    /// coming); pushing more packets doesn't bring it sooner.
+    pub fn next_is_decoding(&self) -> bool {
+        let DecodeTimes::UpTo(dts) = self.decode_times else {
+            return false;
+        };
+        let Some(lowest_pending) = self.pending.iter().min().copied() else {
+            return false;
+        };
+        let lowest_ready = self.ready.iter().map(|(pts, _)| *pts).min();
+        let pending_is_next = lowest_ready.map_or(true, |ready| lowest_pending <= ready);
+        pending_is_next && lowest_pending <= dts
+    }
+
     /// Whether the frame with PTS `pts`, the lowest of the ready ones, is the next to show
     fn is_next(&self, pts: i64) -> bool {
         let later_packets_show_it_later = match self.decode_times {
@@ -232,6 +248,52 @@ mod tests {
         // 3 is pushed but no DTS reached 4 yet
         push(&mut order, &[(8, 3)]);
         assert_eq!(pop_all(&mut order), [3]);
+    }
+
+    /// After a seek, the target's frame needs a DTS that reaches it before it can go out; from
+    /// then on it's only waiting for the decoder
+    #[test]
+    fn the_next_frame_is_decoding_once_a_dts_reaches_it() {
+        let mut order = FrameOrder::new(false);
+        assert!(!order.next_is_decoding());
+
+        // I B B P B B, from a keyframe at 3 with two leading frames before it: 1 and 2 aren't
+        // shown (before the target)
+        push(&mut order, &[(3, 1)]);
+        assert!(!order.next_is_decoding());
+        order.pushed(Some(1), Some(2), false);
+        assert!(!order.next_is_decoding());
+        order.pushed(Some(2), Some(3), false);
+        assert!(order.next_is_decoding());
+        push(&mut order, &[(6, 4)]);
+        assert!(order.next_is_decoding());
+
+        // a frame after it out first doesn't change that
+        decode(&mut order, &[6]);
+        assert!(order.next_is_decoding());
+        decode(&mut order, &[3]);
+        assert!(!order.next_is_decoding());
+        assert_eq!(order.pop(), Some(3));
+
+        // 6 is out of the decoder, but no DTS reached it yet: a packet to come may show a frame
+        // before it
+        assert!(!order.next_is_decoding());
+        assert_eq!(order.pop(), None);
+        // and one does
+        push(&mut order, &[(4, 5)]);
+        assert!(order.next_is_decoding());
+        decode(&mut order, &[4]);
+        assert_eq!(order.pop(), Some(4));
+        assert!(!order.next_is_decoding());
+    }
+
+    /// Without usable DTS nothing says when a frame is next: more packets are always wanted
+    #[test]
+    fn without_dts_the_next_frame_is_never_only_decoding() {
+        let mut order = FrameOrder::<i64>::new(false);
+        order.pushed(Some(0), None, true);
+        order.pushed(Some(1), None, true);
+        assert!(!order.next_is_decoding());
     }
 
     /// A packet whose frame isn't shown (decoded only for others: before a seek's target)

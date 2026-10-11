@@ -1,5 +1,6 @@
 use std::ffi::c_void;
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+use std::time::Duration;
 
 use log::{debug, trace, warn};
 
@@ -29,6 +30,8 @@ pub struct VTDecoder {
     #[allow(dead_code)]
     frame_tx: std::sync::mpsc::Sender<DecodeResult>,
     frame_rx: std::sync::mpsc::Receiver<DecodeResult>,
+    /// A result `wait_for_result` took, for the next `take_result`
+    waited: Option<DecodeResult>,
     // Store the raw pointer to the boxed sender so we can clean it up
     sender_ptr: *mut std::sync::mpsc::Sender<DecodeResult>,
 }
@@ -133,6 +136,7 @@ impl VTDecoder {
             time_base,
             frame_tx,
             frame_rx,
+            waited: None,
             vt_decoder_ptr,
             sender_ptr,
         };
@@ -187,6 +191,21 @@ impl VTDecoder {
         Ok(())
     }
 
+    /// Waits until VideoToolbox has finished with another packet (or has one `take_result`
+    /// hasn't given yet), for at most `timeout`. False if it didn't.
+    pub fn wait_for_result(&mut self, timeout: Duration) -> bool {
+        if self.waited.is_some() {
+            return true;
+        }
+        match self.frame_rx.recv_timeout(timeout) {
+            Ok(result) => {
+                self.waited = Some(result);
+                true
+            }
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => false,
+        }
+    }
+
     fn decode_frame(&mut self, packet: Packet) -> Result<(), CodecError> {
         let ret = unsafe { vt_decode_frame(self.vt_decoder_ptr, packet.as_ptr(), 0) };
         if ret < 0 {
@@ -218,7 +237,11 @@ impl VTDecoder {
     /// skipped it or couldn't decode it. `None` while it hasn't finished with one since the last
     /// take (it decodes asynchronously).
     pub fn take_result(&mut self) -> Result<Option<DecodeResult>, Error> {
-        match self.frame_rx.try_recv() {
+        let received = match self.waited.take() {
+            Some(result) => Ok(result),
+            None => self.frame_rx.try_recv(),
+        };
+        match received {
             Ok(result) => {
                 match &result {
                     DecodeResult::Frame(_) => trace!("VideoToolbox: got frame from channel"),
@@ -247,6 +270,7 @@ impl VTDecoder {
         // Bump generation and wait — callback will drop stale frames.
         unsafe { vt_decoder_flush_buffers(self.vt_decoder_ptr) };
         // Drain anything that made it into the channel before the generation bump.
+        self.waited = None;
         while self.frame_rx.try_recv().is_ok() {}
     }
 }

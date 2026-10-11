@@ -555,6 +555,33 @@ impl VideoDecoder {
         self.decode_backend
     }
 
+    /// Whether the next frame (`enable_reordering`) is still being decoded and needs no more
+    /// packets to come out: its packet went in, and every packet that could show a frame before
+    /// it. Then `wait_for_decoder` brings it out; more packets don't bring it sooner, they only
+    /// give the decoder more to do first. Only VideoToolbox decodes asynchronously like this:
+    /// FFmpeg's decoders give a frame for more packets.
+    pub fn next_frame_is_decoding(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self.vt_decoder.is_some() {
+            return self
+                .order
+                .as_ref()
+                .is_some_and(|order| order.next_is_decoding());
+        }
+        false
+    }
+
+    /// Waits until the decoder has something for the next `take()` (a frame, or word that a
+    /// packet won't give one), for at most a second. False if it didn't. VideoToolbox only:
+    /// FFmpeg's decoders give their frames as they decode them, so they never have one coming.
+    pub fn wait_for_decoder(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(vt_decoder) = &mut self.vt_decoder {
+            return vt_decoder.wait_for_result(std::time::Duration::from_secs(1));
+        }
+        false
+    }
+
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
         self.clear_frame_order();
 
