@@ -555,6 +555,17 @@ impl VideoDecoder {
         self.decode_backend
     }
 
+    /// No frame shown before `pts` is wanted until the next flush (`enable_reordering`): after a
+    /// seek, the frame at `pts` is the one to show, and the caller drops the frames before it.
+    /// Those are dropped here, and the frame at `pts` comes out as soon as the decoder gives it,
+    /// without the packets after it that would only show it's next.
+    pub fn skip_frames_before(&mut self, pts: Timestamp) {
+        if let Some(order) = &mut self.order {
+            let pts = pts.with_time_base(self.time_base);
+            order.skip_frames_before(pts.timestamp());
+        }
+    }
+
     /// Whether the next frame (`enable_reordering`) is still being decoded and needs no more
     /// packets to come out: its packet went in, and every packet that could show a frame before
     /// it. Then `wait_for_decoder` brings it out; more packets don't bring it sooner, they only

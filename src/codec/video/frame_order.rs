@@ -9,6 +9,10 @@
 //! goes out once its PTS is at most the highest DTS pushed and no packet still to come out shows
 //! a frame before it. That waits only as many packets as the stream reorders frames by (2 with
 //! B-pyramids, none without B-frames), where a fixed-size buffer waited for its size.
+//!
+//! After a seek the caller can say which frame it wants first (`skip_frames_before`): frames
+//! shown before it are dropped, so that one goes out as soon as it's decoded, without waiting
+//! for the packets after it that only show it's next.
 
 use log::warn;
 
@@ -39,6 +43,8 @@ pub(crate) struct FrameOrder<F> {
     /// Frames out of the decoder, waiting for their turn, with their PTS
     ready: Vec<(i64, F)>,
     decode_times: DecodeTimes,
+    /// The frames shown before this PTS aren't wanted (`skip_frames_before`)
+    wanted_from: Option<i64>,
     /// Whether the decoder gives frames in display order (FFmpeg's decoders reorder frames
     /// themselves; VideoToolbox gives them as it decodes them). Then a frame also means none
     /// before it is still to come: a packet whose frame the decoder dropped without a word
@@ -55,6 +61,7 @@ impl<F> FrameOrder<F> {
             pending: Vec::new(),
             ready: Vec::new(),
             decode_times: DecodeTimes::NonePushed,
+            wanted_from: None,
             in_display_order,
             draining: false,
             logged_unusable: false,
@@ -89,13 +96,24 @@ impl<F> FrameOrder<F> {
         };
     }
 
+    /// No frame shown before `pts` is wanted until the next clear (a seek's frame is the one at
+    /// `pts`, and the caller drops the ones before it): they're dropped as they come, and don't
+    /// hold the frames after them. The frame at `pts` goes out as soon as the decoder gives it,
+    /// without waiting for a DTS to reach it.
+    pub fn skip_frames_before(&mut self, pts: i64) {
+        self.wanted_from = Some(pts);
+        self.ready.retain(|(ready, _)| *ready >= pts);
+    }
+
     /// The decoder gave the frame of the packet with PTS `pts`
     pub fn decoded(&mut self, pts: i64, frame: F) {
         self.forget_pending(pts);
         if self.in_display_order {
             self.pending.retain(|&pending| pending > pts);
         }
-        self.ready.push((pts, frame));
+        if self.is_wanted(pts) {
+            self.ready.push((pts, frame));
+        }
     }
 
     /// The decoder won't give a frame for the packet with PTS `pts` (it skipped it, or couldn't
@@ -119,6 +137,7 @@ impl<F> FrameOrder<F> {
         self.pending.clear();
         self.ready.clear();
         self.decode_times = DecodeTimes::NonePushed;
+        self.wanted_from = None;
         self.draining = false;
     }
 
@@ -143,27 +162,47 @@ impl<F> FrameOrder<F> {
     /// it goes out as soon as the decoder gives it (and the ones before it that are still
     /// coming); pushing more packets doesn't bring it sooner.
     pub fn next_is_decoding(&self) -> bool {
-        let DecodeTimes::UpTo(dts) = self.decode_times else {
-            return false;
-        };
-        let Some(lowest_pending) = self.pending.iter().min().copied() else {
+        let Some(lowest_pending) = self.wanted_pending().min() else {
             return false;
         };
         let lowest_ready = self.ready.iter().map(|(pts, _)| *pts).min();
         let pending_is_next = lowest_ready.map_or(true, |ready| lowest_pending <= ready);
-        pending_is_next && lowest_pending <= dts
+        let reached = match self.decode_times {
+            DecodeTimes::UpTo(dts) => lowest_pending <= dts,
+            DecodeTimes::NonePushed | DecodeTimes::Unusable => false,
+        };
+        pending_is_next && (reached || self.is_first_wanted(lowest_pending))
     }
 
     /// Whether the frame with PTS `pts`, the lowest of the ready ones, is the next to show
     fn is_next(&self, pts: i64) -> bool {
-        let later_packets_show_it_later = match self.decode_times {
-            DecodeTimes::UpTo(dts) => pts <= dts,
-            DecodeTimes::NonePushed | DecodeTimes::Unusable => {
-                self.in_display_order || self.ready.len() >= FALLBACK_DEPTH
-            }
-        };
-        let pushed_packets_show_it_later = self.pending.iter().all(|&pending| pending >= pts);
+        let later_packets_show_it_later = self.is_first_wanted(pts)
+            || match self.decode_times {
+                DecodeTimes::UpTo(dts) => pts <= dts,
+                DecodeTimes::NonePushed | DecodeTimes::Unusable => {
+                    self.in_display_order || self.ready.len() >= FALLBACK_DEPTH
+                }
+            };
+        let pushed_packets_show_it_later = self.wanted_pending().all(|pending| pending >= pts);
         later_packets_show_it_later && pushed_packets_show_it_later
+    }
+
+    /// Whether the frame at `pts` is wanted (see `skip_frames_before`)
+    fn is_wanted(&self, pts: i64) -> bool {
+        self.wanted_from.map_or(true, |from| pts >= from)
+    }
+
+    /// Whether the frame at `pts` is the first one wanted: no frame shown before it is
+    fn is_first_wanted(&self, pts: i64) -> bool {
+        self.wanted_from == Some(pts)
+    }
+
+    /// The PTS of the pushed packets still to come out of the decoder whose frames are wanted
+    fn wanted_pending(&self) -> impl Iterator<Item = i64> + '_ {
+        self.pending
+            .iter()
+            .copied()
+            .filter(move |&pending| self.is_wanted(pending))
     }
 
     fn forget_pending(&mut self, pts: i64) {
@@ -285,6 +324,43 @@ mod tests {
         decode(&mut order, &[4]);
         assert_eq!(order.pop(), Some(4));
         assert!(!order.next_is_decoding());
+    }
+
+    /// After a seek, with the frame wanted first known, that frame goes out as soon as it's
+    /// decoded: the packets after it that only show it's next aren't needed. The frames before
+    /// it are dropped, and the ones after it still wait for a DTS to reach them.
+    #[test]
+    fn the_first_frame_wanted_goes_out_as_soon_as_its_decoded() {
+        let mut order = FrameOrder::new(false);
+        // I P B B P, the target is the first P (3): the B frames before it aren't shown
+        push(&mut order, &[(0, -2)]);
+        order.skip_frames_before(3);
+        push(&mut order, &[(3, -1)]);
+        // no DTS reaches 3, but nothing before it is wanted
+        assert!(order.next_is_decoding());
+        decode(&mut order, &[0]);
+        assert_eq!(order.pop(), None);
+        decode(&mut order, &[3]);
+        assert_eq!(order.pop(), Some(3));
+        assert!(!order.next_is_decoding());
+
+        // a frame before it that comes after all is dropped
+        push(&mut order, &[(1, 0), (2, 1), (6, 2)]);
+        decode(&mut order, &[1, 2, 6]);
+        assert_eq!(order.pop(), None);
+        // 6 waits for a DTS to reach it, as ever
+        push(&mut order, &[(4, 3), (5, 4)]);
+        decode(&mut order, &[4]);
+        assert_eq!(pop_all(&mut order), [4]);
+        decode(&mut order, &[5]);
+        push(&mut order, &[(9, 6)]);
+        assert_eq!(pop_all(&mut order), [5, 6]);
+
+        // a seek forgets it
+        order.clear();
+        push(&mut order, &[(0, -2), (3, -1)]);
+        decode(&mut order, &[0, 3]);
+        assert_eq!(order.pop(), None);
     }
 
     /// Without usable DTS nothing says when a frame is next: more packets are always wanted
