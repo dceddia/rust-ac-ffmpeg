@@ -7,7 +7,7 @@ mod frame_order;
 pub mod pixel;
 pub mod scaler;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod videotoolbox;
 
 use log::{debug, info, warn};
@@ -65,7 +65,7 @@ pub enum VideoToolboxOutput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeBackend {
     Software,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     VideoToolbox,
     FfmpegHardware,
 }
@@ -104,7 +104,7 @@ pub struct VideoDecoderBuilder {
     decode_backend: DecodeBackend,
     thread_count: Option<i32>,
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     vt_decoder: Option<videotoolbox::VTDecoder>,
 }
 
@@ -124,7 +124,7 @@ impl VideoDecoderBuilder {
             enable_reordering: false,
             decode_backend: DecodeBackend::Software,
             thread_count: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             vt_decoder: None,
         }
     }
@@ -351,7 +351,7 @@ impl VideoDecoderBuilder {
             return self.finish_build();
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             if !Self::test_env_flag("RECUT_SKIP_CUSTOM_VIDEOTOOLBOX") {
                 let params = self.codec_parameters();
@@ -395,7 +395,7 @@ impl VideoDecoderBuilder {
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             let params = self.codec_parameters();
 
@@ -438,9 +438,9 @@ impl VideoDecoderBuilder {
 
         // FFmpeg's decoders give frames in display order; VideoToolbox gives them as it
         // decodes them
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let in_display_order = self.vt_decoder.is_none();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         let in_display_order = true;
 
         let order = if self.enable_reordering {
@@ -463,7 +463,7 @@ impl VideoDecoderBuilder {
             output_empty: true,
             decode_backend: self.decode_backend,
 
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             vt_decoder: self.vt_decoder.take(),
         })
     }
@@ -494,7 +494,7 @@ pub struct VideoDecoder {
     output_empty: bool,
     decode_backend: DecodeBackend,
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     vt_decoder: Option<videotoolbox::VTDecoder>,
 }
 
@@ -585,7 +585,7 @@ impl VideoDecoder {
     /// software (`Some(false)`), as `VTDecoder::uses_hardware` says. `None` for the other
     /// decoders, or if VideoToolbox doesn't say. VideoToolbox may settle on a decoder only once
     /// it has seen the stream: ask after decoding some frames.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn videotoolbox_uses_hardware(&self) -> Option<bool> {
         self.vt_decoder
             .as_ref()
@@ -609,7 +609,7 @@ impl VideoDecoder {
     /// give the decoder more to do first. Only VideoToolbox decodes asynchronously like this:
     /// FFmpeg's decoders give a frame for more packets.
     pub fn next_frame_is_decoding(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if self.vt_decoder.is_some() {
             return self
                 .order
@@ -623,7 +623,7 @@ impl VideoDecoder {
     /// packet won't give one), for at most a second. False if it didn't. VideoToolbox only:
     /// FFmpeg's decoders give their frames as they decode them, so they never have one coming.
     pub fn wait_for_decoder(&mut self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.wait_for_result(std::time::Duration::from_secs(1));
         }
@@ -633,7 +633,7 @@ impl VideoDecoder {
     pub fn push_with_reset(&mut self, packet: Packet) -> Result<(), Error> {
         self.clear_frame_order();
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             let packet = packet.with_time_base(self.time_base);
             let (pts, dts, is_discard) = (packet.pts(), packet.dts(), packet.is_discard());
@@ -669,7 +669,7 @@ impl Decoder for VideoDecoder {
         let packet = packet.with_time_base(self.time_base);
         let (pts, dts, is_discard) = (packet.pts(), packet.dts(), packet.is_discard());
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             vt_decoder.try_push(packet)?;
             self.note_pushed(pts, dts, is_discard);
@@ -696,7 +696,7 @@ impl Decoder for VideoDecoder {
             order.flushed();
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.try_flush();
         }
@@ -716,7 +716,7 @@ impl Decoder for VideoDecoder {
         self.clear_frame_order();
         self.output_empty = true;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.flush_buffers();
         }
@@ -800,7 +800,7 @@ impl VideoDecoder {
     }
 
     fn receive_output(&mut self) -> Result<Option<DecoderOutput>, Error> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             use videotoolbox::DecodeResult;
 

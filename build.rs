@@ -24,8 +24,13 @@ fn main() {
         .file("src/codec/audio/resampler.c")
         .file("src/codec/video/scaler.c");
 
-    #[cfg(target_os = "macos")]
-    let build = build.file("src/codec/video/videotoolbox.c");
+    // the target's OS, not the build script's (`cfg!` here is the host's): iOS has VideoToolbox too
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let apple = target_os == "macos" || target_os == "ios";
+
+    if apple {
+        build.file("src/codec/video/videotoolbox.c");
+    }
 
     build.compile("ffwrapper");
 
@@ -45,9 +50,8 @@ fn main() {
     link("swresample", ffmpeg_link_mode);
     link("swscale", ffmpeg_link_mode);
     
-    // Link VideoToolbox framework on macOS
-    #[cfg(target_os = "macos")]
-    {
+    // Link VideoToolbox framework on macOS and iOS
+    if apple {
         println!("cargo:rustc-link-lib=framework=VideoToolbox");
     }
 }
