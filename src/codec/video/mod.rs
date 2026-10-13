@@ -7,6 +7,8 @@ mod frame_order;
 pub mod pixel;
 pub mod scaler;
 
+#[cfg(target_os = "android")]
+pub mod mediacodec;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod videotoolbox;
 
@@ -67,6 +69,11 @@ pub enum DecodeBackend {
     Software,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     VideoToolbox,
+    /// Android's MediaCodec (`mediacodec`): software frames copied out of the hardware
+    /// decoder's buffers, through the NDK, or FFmpeg's `h264_mediacodec`/`hevc_mediacodec`
+    /// (`RECUT_MEDIACODEC=ffmpeg`)
+    #[cfg(target_os = "android")]
+    MediaCodec,
     FfmpegHardware,
 }
 
@@ -106,6 +113,8 @@ pub struct VideoDecoderBuilder {
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     vt_decoder: Option<videotoolbox::VTDecoder>,
+    #[cfg(target_os = "android")]
+    mc_decoder: Option<mediacodec::MediaCodecDecoder>,
 }
 
 impl VideoDecoderBuilder {
@@ -126,6 +135,8 @@ impl VideoDecoderBuilder {
             thread_count: None,
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             vt_decoder: None,
+            #[cfg(target_os = "android")]
+            mc_decoder: None,
         }
     }
 
@@ -148,6 +159,28 @@ impl VideoDecoderBuilder {
 
         if ptr.is_null() {
             return Err(Error::new("unable to create a decoder"));
+        }
+
+        unsafe { Ok(Self::from_raw_ptr(ptr)) }
+    }
+
+    /// Create a new builder from given codec parameters, with the decoder named `codec` (one of
+    /// the codec's other decoders, as a MediaCodec one).
+    #[cfg(target_os = "android")]
+    fn from_codec_parameters_with_name(
+        codec: &str,
+        codec_parameters: &VideoCodecParameters,
+    ) -> Result<Self, Error> {
+        let codec_str = CString::new(codec).expect("invalid codec name");
+        let ptr = unsafe {
+            super::ffw_decoder_from_codec_parameters_with_name(
+                codec_str.as_ptr() as _,
+                codec_parameters.as_ptr(),
+            )
+        };
+
+        if ptr.is_null() {
+            return Err(Error::new(format!("no {codec} decoder for this stream")));
         }
 
         unsafe { Ok(Self::from_raw_ptr(ptr)) }
@@ -328,6 +361,33 @@ impl VideoDecoderBuilder {
         builder.open_and_finish()
     }
 
+    /// FFmpeg's own MediaCodec decoder for the stream (`h264_mediacodec`, `hevc_mediacodec`;
+    /// `RECUT_MEDIACODEC=ffmpeg`), opened: Err if there's none for the codec, FFmpeg has no
+    /// `JavaVM`, or no hardware decoder takes the stream (FFmpeg asks MediaCodecList for one
+    /// that isn't software-only and decodes the stream's profile).
+    #[cfg(target_os = "android")]
+    fn build_ffmpeg_mediacodec_from_params(
+        &self,
+        params: &VideoCodecParameters,
+    ) -> Result<VideoDecoder, Error> {
+        if Self::test_env_flag("RECUT_SKIP_FFMPEG_HWACCEL") {
+            return Err(Error::new("MediaCodec decode skipped by environment"));
+        }
+        let name = params
+            .decoder_name()
+            .and_then(mediacodec::ffmpeg_decoder_name)
+            .ok_or_else(|| Error::new("no MediaCodec decoder for the codec"))?;
+        if !mediacodec::has_java_vm() {
+            return Err(Error::new("FFmpeg has no JavaVM for MediaCodec"));
+        }
+
+        let mut builder = self.copy_settings_to(
+            VideoDecoderBuilder::from_codec_parameters_with_name(name, params)?,
+        );
+        builder.decode_backend = DecodeBackend::MediaCodec;
+        builder.open_and_finish()
+    }
+
     fn open_and_finish(self) -> Result<VideoDecoder, Error> {
         if unsafe { super::ffw_decoder_open(self.ptr) } != 0 {
             return Err(Error::new("unable to open FFmpeg decoder context"));
@@ -420,7 +480,58 @@ impl VideoDecoderBuilder {
                 }
             }
 
-            #[cfg(not(target_os = "windows"))]
+            // Recut's MediaCodec decoder (the NDK's), as Recut's VideoToolbox decoder on Apple's
+            // systems: the FFmpeg decoder opened above stays, for the stream's parameters
+            #[cfg(target_os = "android")]
+            if !mediacodec::use_ffmpeg_decoders() {
+                if Self::test_env_flag("RECUT_SKIP_MEDIACODEC")
+                    || Self::test_env_flag("RECUT_SKIP_FFMPEG_HWACCEL")
+                {
+                    debug!("MediaCodec decode skipped by environment");
+                } else {
+                    match mediacodec::MediaCodecDecoder::new(&params, self.time_base) {
+                        Ok(decoder) => {
+                            self.mc_decoder = Some(decoder);
+                            self.decode_backend = DecodeBackend::MediaCodec;
+                            return self.finish_build();
+                        }
+                        Err(e) if self.hardware_accel == HardwareAccel::Required => {
+                            warn!("MediaCodec decoder init failed: {}", e);
+                            return Err(Error::new(format!(
+                                "unable to create required hardware decoder: {}",
+                                e
+                            )));
+                        }
+                        Err(e) => debug!("MediaCodec decoder init failed: {}", e),
+                    }
+                }
+                return self.finish_build();
+            }
+
+            // FFmpeg's MediaCodec decoders (`RECUT_MEDIACODEC=ffmpeg`), through MediaCodec's
+            // Java API: for comparing on a phone
+            #[cfg(target_os = "android")]
+            {
+                unsafe { super::ffw_decoder_free(self.ptr) };
+                self.ptr = ptr::null_mut();
+
+                match self.build_ffmpeg_mediacodec_from_params(&params) {
+                    Ok(decoder) => return Ok(decoder),
+                    Err(e) => {
+                        if self.hardware_accel == HardwareAccel::Required {
+                            warn!("MediaCodec decoder init failed: {}", e);
+                            return Err(Error::new(format!(
+                                "unable to create required hardware decoder: {}",
+                                e
+                            )));
+                        }
+                        debug!("MediaCodec decoder init failed: {}", e);
+                        return self.build_software_from_params(&params);
+                    }
+                }
+            }
+
+            #[cfg(not(any(target_os = "windows", target_os = "android")))]
             {
                 if self.hardware_accel == HardwareAccel::Required {
                     return Err(Error::new("hardware decoding is not supported on this platform"));
@@ -465,6 +576,8 @@ impl VideoDecoderBuilder {
 
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             vt_decoder: self.vt_decoder.take(),
+            #[cfg(target_os = "android")]
+            mc_decoder: self.mc_decoder.take(),
         })
     }
 }
@@ -496,6 +609,8 @@ pub struct VideoDecoder {
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     vt_decoder: Option<videotoolbox::VTDecoder>,
+    #[cfg(target_os = "android")]
+    mc_decoder: Option<mediacodec::MediaCodecDecoder>,
 }
 
 impl VideoDecoder {
@@ -676,6 +791,13 @@ impl Decoder for VideoDecoder {
             return Ok(());
         }
 
+        #[cfg(target_os = "android")]
+        if let Some(mc_decoder) = &mut self.mc_decoder {
+            mc_decoder.try_push(&packet)?;
+            self.note_pushed(pts, dts, is_discard);
+            return Ok(());
+        }
+
         unsafe {
             match super::ffw_decoder_push_packet(self.ptr, packet.as_ptr()) {
                 1 => {
@@ -701,6 +823,11 @@ impl Decoder for VideoDecoder {
             return vt_decoder.try_flush();
         }
 
+        #[cfg(target_os = "android")]
+        if let Some(mc_decoder) = &mut self.mc_decoder {
+            return mc_decoder.try_flush();
+        }
+
         unsafe {
             match super::ffw_decoder_push_packet(self.ptr, ptr::null()) {
                 1 => Ok(()),
@@ -719,6 +846,11 @@ impl Decoder for VideoDecoder {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(vt_decoder) = &mut self.vt_decoder {
             return vt_decoder.flush_buffers();
+        }
+
+        #[cfg(target_os = "android")]
+        if let Some(mc_decoder) = &mut self.mc_decoder {
+            return mc_decoder.flush_buffers();
         }
 
         unsafe { super::ffw_decoder_flush_buffers(self.ptr) }
@@ -820,6 +952,12 @@ impl VideoDecoder {
                 }
                 None => Ok(None),
             };
+        }
+
+        #[cfg(target_os = "android")]
+        if let Some(mc_decoder) = &mut self.mc_decoder {
+            let frame = mc_decoder.take(self.rotation)?;
+            return Ok(frame.map(DecoderOutput::Frame));
         }
 
         let mut fptr = ptr::null_mut();

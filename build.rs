@@ -31,6 +31,9 @@ fn main() {
     if apple {
         build.file("src/codec/video/videotoolbox.c");
     }
+    if target_os == "android" {
+        build.file("src/codec/video/mediacodec.c");
+    }
 
     build.compile("ffwrapper");
 

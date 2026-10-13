@@ -230,6 +230,8 @@ typedef struct Decoder {
 
 Decoder* ffw_decoder_new(const char* codec);
 Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params);
+Decoder* ffw_decoder_from_codec_parameters_with_name(const char* codec,
+                                                     const AVCodecParameters* params);
 int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int size);
 int ffw_decoder_set_initial_option(Decoder* decoder, const char* key, const char* value);
 void ffw_decoder_set_thread_count(Decoder* decoder, int count);
@@ -396,12 +398,10 @@ err:
     return NULL;
 }
 
-Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
-    const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
-    if (decoder == NULL) {
-        return NULL;
-    }
-
+// A decoder for `params` with the given codec (FFmpeg's default decoder for its codec ID, or
+// one chosen by name, as Android's MediaCodec decoders are)
+static Decoder* ffw_decoder_with_codec_parameters(const AVCodec* decoder,
+                                                  const AVCodecParameters* params) {
     Decoder* res = malloc(sizeof(Decoder));
     if (res == NULL) {
         return NULL;
@@ -439,6 +439,27 @@ err:
     ffw_decoder_free(res);
 
     return NULL;
+}
+
+Decoder* ffw_decoder_from_codec_parameters(const AVCodecParameters* params) {
+    const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
+    if (decoder == NULL) {
+        return NULL;
+    }
+
+    return ffw_decoder_with_codec_parameters(decoder, params);
+}
+
+// The decoder named `codec` for `params`, NULL if FFmpeg has no such decoder or it decodes
+// another codec
+Decoder* ffw_decoder_from_codec_parameters_with_name(const char* codec,
+                                                     const AVCodecParameters* params) {
+    const AVCodec* decoder = avcodec_find_decoder_by_name(codec);
+    if (decoder == NULL || decoder->id != params->codec_id) {
+        return NULL;
+    }
+
+    return ffw_decoder_with_codec_parameters(decoder, params);
 }
 
 int ffw_decoder_set_extradata(Decoder* decoder, const uint8_t* extradata, int size) {

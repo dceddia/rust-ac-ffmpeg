@@ -67,6 +67,10 @@ extern "C" {
 
     fn ffw_decoder_new(codec: *const c_char) -> *mut c_void;
     fn ffw_decoder_from_codec_parameters(params: *const c_void) -> *mut c_void;
+    fn ffw_decoder_from_codec_parameters_with_name(
+        codec: *const c_char,
+        params: *const c_void,
+    ) -> *mut c_void;
     fn ffw_decoder_set_extradata(decoder: *mut c_void, extradata: *const u8, size: c_int) -> c_int;
     fn ffw_decoder_set_initial_option(
         decoder: *mut c_void,
