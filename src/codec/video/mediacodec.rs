@@ -266,6 +266,9 @@ pub(crate) fn use_ffmpeg_decoders() -> bool {
 /// reach it
 const TIMESTAMP_OFFSET_US: i64 = 1_000_000_000;
 
+/// How long a push waits for an input buffer to free up before it's refused (EAGAIN)
+const INPUT_WAIT: Duration = Duration::from_millis(2);
+
 /// The longest a take waits for the last pictures once the end of the stream went in
 const DRAIN_WAIT: Duration = Duration::from_secs(1);
 
@@ -396,6 +399,7 @@ impl MediaCodecDecoder {
             _ => hevc_parameter_sets(extradata)?,
         };
 
+        let opening = Instant::now();
         let mime_c = CString::new(mime).expect("a MIME type without NUL");
         let codec = unsafe { ndk::AMediaCodec_createDecoderByType(mime_c.as_ptr()) };
         if codec.is_null() {
@@ -454,10 +458,11 @@ impl MediaCodecDecoder {
             &decoder.name,
         )?;
         info!(
-            "MediaCodec: {} decodes {mime} {}x{}",
+            "MediaCodec: {} decodes {mime} {}x{} (opened in {:?})",
             decoder.name,
             params.width(),
-            params.height()
+            params.height(),
+            opening.elapsed()
         );
         decoder.read_output_format();
         Ok(decoder)
@@ -514,7 +519,8 @@ impl MediaCodecDecoder {
         {
             return Err(CodecError::from(self.gave_nothing()));
         }
-        let Some(index) = self.free_input_buffer(Duration::ZERO)? else {
+        // a moment for one to free up, rather than have the caller spin through takes
+        let Some(index) = self.free_input_buffer(INPUT_WAIT)? else {
             return Err(CodecError::again(
                 "MediaCodec: every input buffer is in use",
             ));
